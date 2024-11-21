@@ -39,13 +39,9 @@ def get_dataset():
     This function will return the dataset
     """
     train_dataframe = pd.read_csv('sep7_train_dataset.csv')
-    train_dataframe['source_text'] = train_dataframe['source_text'].str.replace("zoho", "[COMPANY_NAME]", case=False)
-    train_dataframe['target_text'] = train_dataframe['target_text'].str.replace("zoho", "[COMPANY_NAME]", case=False)
     train_dataframe = train_dataframe.drop_duplicates(subset='source_text')
 
     test_dataframe = pd.read_csv('sep7_test_dataset.csv')
-    test_dataframe['source_text'] = test_dataframe['source_text'].str.replace("zoho", "[COMPANY_NAME]", case=False)
-    test_dataframe['target_text'] = test_dataframe['target_text'].str.replace("zoho", "[COMPANY_NAME]", case=False)
     test_dataframe = test_dataframe.drop_duplicates(subset='source_text')
 
     return train_dataframe, test_dataframe
