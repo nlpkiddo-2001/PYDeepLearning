@@ -4,8 +4,7 @@ import json
 from datasets import load_dataset
 from huggingface_hub import login
 
-# Replace with your token or use 'huggingface-cli login' in terminal
-# login("***REMOVED***xxx")
+
 
 def format_ultrachat(example):
     """

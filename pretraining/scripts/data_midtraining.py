@@ -6,8 +6,6 @@ from datasets import load_dataset
 from huggingface_hub import login
 from transformers import AutoTokenizer
 
-# Replace with your token or use 'huggingface-cli login' in terminal
-# login("***REMOVED***xxx")
 
 def estimate_tokens(text):
     # Rough estimation: 1 token ~= 4 characters
