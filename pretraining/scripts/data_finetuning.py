@@ -1,112 +1,100 @@
 import argparse
 import os
 import json
-from datasets import load_dataset, concatenate_datasets
+from datasets import load_dataset
 from huggingface_hub import login
 
 # Replace with your token or use 'huggingface-cli login' in terminal
 login("***REMOVED***ESWJGUGdFGbShXfXYdosaeFzzXpeeykKsX")
-
-def format_aya(example):
-    """
-    Converts Aya (inputs/targets) to Generic Messages format.
-    """
-    return {
-        "messages": [
-            {"role": "user", "content": example['inputs']},
-            {"role": "assistant", "content": example['targets']}
-        ]
-    }
 
 def format_ultrachat(example):
     """
     Ensures UltraChat is in the correct Generic Messages format.
     """
     return {
-        "messages": example['messages']
+        "messages": example['messages'],
+        "source": "ultrachat_200k"
+    }
+
+def format_openhermes(example):
+    """
+    Converts OpenHermes (conversations) to Generic Messages format.
+    """
+    # OpenHermes uses 'conversations' with 'from' (human/gpt) and 'value'
+    messages = []
+    for turn in example['conversations']:
+        role = "user" if turn['from'] == 'human' else "assistant"
+        messages.append({"role": role, "content": turn['value']})
+    
+    return {
+        "messages": messages,
+        "source": "openhermes"
     }
 
 def main():
-    parser = argparse.ArgumentParser(description="Production Data Preparation Script")
+    parser = argparse.ArgumentParser(description="Fine-tuning Data Preparation Script (English Only)")
     parser.add_argument("--output_dir", type=str, default="./data/finetuning", help="Directory to save the processed dataset")
-    
-    # New arguments for Dry Run logic
-    parser.add_argument("--dry_run", action="store_true", help="If set, runs a test with a small sample size.")
-    parser.add_argument("--sample_size", type=int, default=1000, help="Number of samples to use per dataset if dry_run is active.")
-    
+    parser.add_argument("--sample_limit", type=int, default=500_000, help="Total sample limit (default: 500k)")
+    parser.add_argument("--dry_run", action="store_true", help="Run with a small limit for verification")
     args = parser.parse_args()
 
-    # Determine the limit based on the flag
     if args.dry_run:
-        limit = args.sample_size
-        mode_name = "DRY RUN"
-    else:
-        limit = None # None means 'all data'
-        mode_name = "PRODUCTION (Full Download)"
+        args.sample_limit = 1_000  # 1k samples for dry run
+        print("--- DRY RUN MODE ACTIVATED ---")
 
     os.makedirs(args.output_dir, exist_ok=True)
-    output_file = os.path.join(args.output_dir, "train_dataset.jsonl")
+    output_file = os.path.join(args.output_dir, "finetuning_data.jsonl")
 
-    print(f"--- Starting Data Preparation ---")
-    print(f"--- Mode: {mode_name} ---")
+    print(f"Starting Fine-tuning Data Preparation...")
+    print(f"Target Sample Limit: {args.sample_limit:,}")
+    print(f"Output Directory: {args.output_dir}")
+
+    current_samples = 0
+    buffer = []
+
+    # Datasets:
+    # 1. UltraChat 200k (English)
+    # 2. OpenHermes 2.5 (English) - Replaces Aya for English-only focus
     
-    # ---------------------------------------------------------
-    # 1. Process UltraChat 200k (Multi-turn)
-    # ---------------------------------------------------------
-    print("\n1. Loading UltraChat 200k...")
-    ds_ultra = load_dataset("HuggingFaceH4/ultrachat_200k", split="train_sft")
-    
-    if limit:
-        # Ensure we don't ask for more samples than exist
-        actual_limit = min(len(ds_ultra), limit)
-        ds_ultra = ds_ultra.select(range(actual_limit))
-        print(f"   -> DRY RUN: Limited UltraChat to {actual_limit} samples.")
+    dataset_configs = [
+        {"name": "HuggingFaceH4/ultrachat_200k", "split": "train_sft", "formatter": format_ultrachat},
+        {"name": "teknium/OpenHermes-2.5", "split": "train", "formatter": format_openhermes}
+    ]
 
-    print("   -> Formatting UltraChat columns...")
-    ds_ultra = ds_ultra.map(
-        format_ultrachat, 
-        remove_columns=ds_ultra.column_names
-    )
-
-    # ---------------------------------------------------------
-    # 2. Process Aya Collection (Multilingual / Single-turn)
-    # ---------------------------------------------------------
-    print("\n2. Loading Aya Collection...")
-    ds_aya = load_dataset("CohereForAI/aya_collection", "aya_dataset", split="train")
-
-    if limit:
-        actual_limit = min(len(ds_aya), limit)
-        ds_aya = ds_aya.select(range(actual_limit))
-        print(f"   -> DRY RUN: Limited Aya to {actual_limit} samples.")
-
-    print("   -> Formatting Aya columns...")
-    ds_aya = ds_aya.map(
-        format_aya,
-        remove_columns=ds_aya.column_names
-    )
-
-    # ---------------------------------------------------------
-    # 3. Merge and Shuffle
-    # ---------------------------------------------------------
-    print("\n3. Merging Datasets...")
-    combined_dataset = concatenate_datasets([ds_ultra, ds_aya])
-    
-    print(f"   -> Total samples before shuffling: {len(combined_dataset)}")
-    print("   -> Shuffling dataset...")
-    combined_dataset = combined_dataset.shuffle(seed=42)
-
-    # ---------------------------------------------------------
-    # 4. Save to JSONL (Generic Format)
-    # ---------------------------------------------------------
-    print(f"\n4. Saving to {output_file}...")
-    
     with open(output_file, "w", encoding="utf-8") as f:
-        for item in combined_dataset:
-            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        for config in dataset_configs:
+            if current_samples >= args.sample_limit:
+                break
+                
+            ds_name = config["name"]
+            print(f"\nProcessing {ds_name}...")
+            
+            try:
+                ds = load_dataset(ds_name, split=config["split"], streaming=True)
+                formatter = config["formatter"]
+                
+                for sample in ds:
+                    if current_samples >= args.sample_limit:
+                        break
+                    
+                    try:
+                        formatted_sample = formatter(sample)
+                        f.write(json.dumps(formatted_sample, ensure_ascii=False) + "\n")
+                        current_samples += 1
+                        
+                        if current_samples % 10_000 == 0:
+                            print(f"Progress: {current_samples:,} / {args.sample_limit:,} samples")
+                            
+                    except Exception as e:
+                        # Skip malformed samples
+                        continue
 
-    print(f"\nSUCCESS! Dataset saved at: {output_file}")
-    print(f"Format: JSONL (Chat/Messages standard)")
-    print(f"Total Count: {len(combined_dataset)}")
+            except Exception as e:
+                print(f"Error processing {ds_name}: {e}")
+
+    print(f"\nProcessing Complete!")
+    print(f"Total Samples Collected: {current_samples:,}")
+    print(f"Saved to: {output_file}")
 
 if __name__ == "__main__":
     main()
