@@ -4,7 +4,7 @@ from datasets import load_dataset, concatenate_datasets
 import time
 from huggingface_hub import login
 
-login("***REMOVED***ESWJGUGdFGbShXfXYdosaeFzzXpeeykKsX")
+login("***REMOVED***xxx")
 
 def main():
     parser = argparse.ArgumentParser(description="Pre-training Data Preparation Script")
