@@ -1,0 +1,38 @@
+stage: "finetune"
+
+data_dir: "./data/finetuning"
+output_dir: "./checkpoints/finetune"
+
+resume_from: "auto"              
+
+model: 
+  dim: 2048                     
+  n_layers: 20                  
+  n_heads: 32                   
+  n_kv_heads: null
+  multiple_of: 256
+  ffn_dim_multiplier: null
+  norm_eps: 1.0e-5
+  dropout: 0.0
+  gradient_checkpointing: true
+
+
+
+batch_size: 8                   
+grad_accum: 8               
+max_steps: 500              
+warmup_steps: 10                 
+learning_rate: 3.0e-4           
+lr_min: 1.0e-6                  
+context_window: 4096            
+save_every: 500                  
+
+use_muon: false
+
+optimization:
+  scheduler_type: "cosine" 
+  
+  batch_size_schedule: null
+    
+  context_length_schedule: null
+
