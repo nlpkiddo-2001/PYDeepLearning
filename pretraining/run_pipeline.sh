@@ -1,111 +1,128 @@
 #!/bin/bash
 set -e # Exit on error
 
-# Configuration
-DATA_ROOT="./data"
-CHECKPOINT_ROOT="./checkpoints"
-TOKENIZER_PATH="$DATA_ROOT/tokenizer.json"
+
 NUM_GPUS=8
 
-# Ensure directories exist
-mkdir -p "$CHECKPOINT_ROOT"
+mkdir -p ./checkpoints/pretrain
+mkdir -p ./checkpoints/midtrain
+mkdir -p ./checkpoints/finetune
 
 echo "=================================================================="
-echo "STEP 1: DATA PACKING"
+echo "LLM Training Pipeline - YAML Configuration Mode"
 echo "=================================================================="
-
-# 1. Pretraining Data
-echo "Packing Pretraining Data..."
-python src/data_packing.py \
-    --input "$DATA_ROOT/pretraining" \
-    --output_dir "$DATA_ROOT/pretraining_bin" \
-    --tokenizer_path "$TOKENIZER_PATH"
-
-# 2. Midtraining Data
-echo "Packing Midtraining Data..."
-python src/data_packing.py \
-    --input "$DATA_ROOT/midtraining" \
-    --output_dir "$DATA_ROOT/midtraining_bin" \
-    --tokenizer_path "$TOKENIZER_PATH"
-
-# 3. Finetuning Data
-echo "Packing Finetuning Data..."
-# Handles single file or directory
-python src/data_packing.py \
-    --input "$DATA_ROOT/finetuning" \
-    --output_dir "$DATA_ROOT/finetuning_bin" \
-    --tokenizer_path "$TOKENIZER_PATH"
-
-
+echo "This pipeline will run all three training stages:"
+echo "  1. Pre-training (from scratch)"
+echo "  2. Mid-training (continued training on domain data)"
+echo "  3. Fine-tuning (supervised instruction tuning)"
+echo ""
+echo "Each stage uses its own YAML config file:"
+echo "  - config.pretrain.yaml"
+echo "  - config.midtrain.yaml"
+echo "  - config.finetune.yaml"
 echo "=================================================================="
-echo "STEP 2: PRE-TRAINING"
-echo "=================================================================="
-torchrun --nproc_per_node=$NUM_GPUS src/main.py \
-    --stage "pretrain" \
-    --data_dir "$DATA_ROOT/pretraining_bin" \
-    --output_dir "$CHECKPOINT_ROOT/pretrain" \
-    --batch_size 32 \
-    --grad_accum 2 \
-    --context_window 4096 \
-    --learning_rate 4e-4 \
-    --max_steps 50000 \
-    --save_every 1000 \
-    --use_muon
+echo ""
 
-echo "=================================================================="
-echo "STEP 3: MID-TRAINING"
-echo "=================================================================="
-# Resume from best pretrain checkpoint
-PRETRAIN_CKPT="$CHECKPOINT_ROOT/pretrain/step_50000.pt"
-if [ ! -f "$PRETRAIN_CKPT" ]; then
-    echo "Warning: Pretrain checkpoint not found at $PRETRAIN_CKPT. Using latest if available."
-    PRETRAIN_CKPT="$CHECKPOINT_ROOT/pretrain/latest.pt"
+if [ ! -f "config.pretrain.yaml" ]; then
+    echo "Error: config.pretrain.yaml not found!"
+    exit 1
 fi
 
-torchrun --nproc_per_node=$NUM_GPUS src/main.py \
-    --stage "midtrain" \
-    --data_dir "$DATA_ROOT/midtraining_bin" \
-    --output_dir "$CHECKPOINT_ROOT/midtrain" \
-    --resume_from "$PRETRAIN_CKPT" \
-    --batch_size 32 \
-    --grad_accum 2 \
-    --context_window 4096 \
-    --learning_rate 4e-5 \
-    --max_steps 5000 \
-    --save_every 500 \
-    --use_muon
-
-echo "=================================================================="
-echo "STEP 4: FINE-TUNING"
-echo "=================================================================="
-MIDTRAIN_CKPT="$CHECKPOINT_ROOT/midtrain/step_5000.pt"
-if [ ! -f "$MIDTRAIN_CKPT" ]; then
-    MIDTRAIN_CKPT="$CHECKPOINT_ROOT/midtrain/latest.pt"
+if [ ! -f "config.midtrain.yaml" ]; then
+    echo "Error: config.midtrain.yaml not found!"
+    exit 1
 fi
 
-torchrun --nproc_per_node=$NUM_GPUS src/main.py \
-    --stage "finetune" \
-    --data_dir "$DATA_ROOT/finetuning_bin" \
-    --output_dir "$CHECKPOINT_ROOT/finetune" \
-    --resume_from "$MIDTRAIN_CKPT" \
-    --batch_size 16 \
-    --grad_accum 4 \
-    --context_window 2048 \
-    --learning_rate 1e-5 \
-    --max_steps 1000 \
-    --save_every 100 \
-    --use_muon
-
-echo "=================================================================="
-echo "STEP 5: EXPORT TO HUGGING FACE"
-echo "=================================================================="
-FINETUNE_CKPT="$CHECKPOINT_ROOT/finetune/final_model.pt"
-if [ ! -f "$FINETUNE_CKPT" ]; then
-    FINETUNE_CKPT="$CHECKPOINT_ROOT/finetune/latest.pt"
+if [ ! -f "config.finetune.yaml" ]; then
+    echo "Error: config.finetune.yaml not found!"
+    exit 1
 fi
 
-python scripts/convert_to_hf.py \
-    --checkpoint "$FINETUNE_CKPT" \
-    --output_dir "$CHECKPOINT_ROOT/***REMOVED***model"
+echo "=================================================================="
+echo "STEP 1: PRE-TRAINING"
+echo "=================================================================="
+echo "Using config: config.pretrain.yaml"
+echo "Starting pre-training from scratch..."
+echo ""
 
+torchrun --nproc_per_node=$NUM_GPUS src/main.py --config config.pretrain.yaml
+
+echo ""
+echo "Pre-training complete!"
+echo ""
+
+echo "=================================================================="
+echo "STEP 2: MID-TRAINING"
+echo "=================================================================="
+echo "Using config: config.midtrain.yaml"
+echo "Note: Make sure config.midtrain.yaml has the correct 'resume_from' path"
+echo ""
+
+LATEST_PRETRAIN=$(ls -t ./checkpoints/pretrain/step_*.pt 2>/dev/null | head -1 || echo "")
+if [ -n "$LATEST_PRETRAIN" ]; then
+    echo "Found latest pretrain checkpoint: $LATEST_PRETRAIN"
+    echo "You may want to update config.midtrain.yaml to use this checkpoint"
+else
+    echo "Warning: No pretrain checkpoint found. Make sure to set resume_from in config.midtrain.yaml"
+fi
+echo ""
+
+torchrun --nproc_per_node=$NUM_GPUS src/main.py --config config.midtrain.yaml
+
+echo ""
+echo "Mid-training complete!"
+echo ""
+
+echo "=================================================================="
+echo "STEP 3: FINE-TUNING"
+echo "=================================================================="
+echo "Using config: config.finetune.yaml"
+echo "Note: Make sure config.finetune.yaml has the correct 'resume_from' path"
+echo ""
+
+LATEST_MIDTRAIN=$(ls -t ./checkpoints/midtrain/step_*.pt 2>/dev/null | head -1 || echo "")
+if [ -n "$LATEST_MIDTRAIN" ]; then
+    echo "Found latest midtrain checkpoint: $LATEST_MIDTRAIN"
+    echo "You may want to update config.finetune.yaml to use this checkpoint"
+else
+    echo "Warning: No midtrain checkpoint found. Make sure to set resume_from in config.finetune.yaml"
+fi
+echo ""
+
+torchrun --nproc_per_node=$NUM_GPUS src/main.py --config config.finetune.yaml
+
+echo ""
+echo "Fine-tuning complete!"
+echo ""
+
+echo "=================================================================="
+echo "STEP 4: EXPORT TO HUGGING FACE (Optional)"
+echo "=================================================================="
+FINETUNE_CKPT=$(ls -t ./checkpoints/finetune/step_*.pt 2>/dev/null | head -1 || echo "")
+
+if [ -z "$FINETUNE_CKPT" ]; then
+    echo "No finetune checkpoint found. Skipping HF export."
+else
+    echo "Found checkpoint: $FINETUNE_CKPT"
+    
+    if [ -f "scripts/convert_to_hf.py" ]; then
+        echo "Converting to Hugging Face format..."
+        python scripts/convert_to_hf.py \
+            --checkpoint "$FINETUNE_CKPT" \
+            --output_dir "./checkpoints/hf_model"
+        echo "Model exported to ./checkpoints/hf_model"
+    else
+        echo "scripts/convert_to_hf.py not found. Skipping HF export."
+    fi
+fi
+
+echo ""
+echo "=================================================================="
 echo "PIPELINE COMPLETE!"
+echo "=================================================================="
+echo "Checkpoints saved in:"
+echo "  - ./checkpoints/pretrain/"
+echo "  - ./checkpoints/midtrain/"
+echo "  - ./checkpoints/finetune/"
+echo "=================================================================="
+

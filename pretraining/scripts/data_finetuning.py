@@ -19,7 +19,6 @@ def format_openhermes(example):
     """
     Converts OpenHermes (conversations) to Generic Messages format.
     """
-    # OpenHermes uses 'conversations' with 'from' (human/gpt) and 'value'
     messages = []
     for turn in example['conversations']:
         role = "user" if turn['from'] == 'human' else "assistant"
@@ -38,7 +37,7 @@ def main():
     args = parser.parse_args()
 
     if args.dry_run:
-        args.sample_limit = 1_000  # 1k samples for dry run
+        args.sample_limit = 1_000 # sample test case
         print("--- DRY RUN MODE ACTIVATED ---")
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -53,7 +52,7 @@ def main():
 
     # Datasets:
     # 1. UltraChat 200k (English)
-    # 2. OpenHermes 2.5 (English) - Replaces Aya for English-only focus
+    # 2. OpenHermes 2.5 (English)
     
     dataset_configs = [
         {"name": "HuggingFaceH4/ultrachat_200k", "split": "train_sft", "formatter": format_ultrachat},
@@ -85,7 +84,6 @@ def main():
                             print(f"Progress: {current_samples:,} / {args.sample_limit:,} samples")
                             
                     except Exception as e:
-                        # Skip malformed samples
                         continue
 
             except Exception as e:

@@ -8,3 +8,4 @@ langdetect
 matplotlib
 pandas
 tqdm
+PyYAML

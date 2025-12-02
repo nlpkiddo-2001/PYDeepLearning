@@ -1,126 +1,158 @@
 import os
+import sys
 import argparse
 import torch
 import json
-from transformers import GPT2Config, GPT2LMHeadModel
+from transformers import LlamaConfig, LlamaForCausalLM
 
-def convert_to_hf(checkpoint_path, output_dir, model_config_path=None):
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+from model import ModelConfig
+torch.serialization.add_safe_globals([ModelConfig])
+
+def convert_to_hf(checkpoint_path, output_dir):
     """
-    Convert custom GPT checkpoint to Hugging Face GPT2LMHeadModel.
+    Convert custom Llama-style GPT checkpoint to Hugging Face LlamaForCausalLM.
     """
     print(f"Loading checkpoint from {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
     
-    # Extract state dict
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     state_dict = checkpoint.get("model", checkpoint)
-    
-    # Extract config
-    # If config is in checkpoint, use it. Otherwise use default or provided path.
     config_obj = checkpoint.get("config", None)
+
+    if config_obj is None:
+        raise ValueError("No config found in checkpoint! Cannot infer model architecture.")
     
-    # Map custom config to HF GPT2Config
-    # Assuming our GPT is similar to GPT-2/Llama
-    # We need to know the architecture details.
-    # Based on src/model.py (which I haven't seen fully but assumed standard GPT)
+    vocab_size = getattr(config_obj, 'vocab_size', 50257)
+    n_layer = getattr(config_obj, 'n_layers', 32)
+    n_head = getattr(config_obj, 'n_heads', 32)
+    n_embd = getattr(config_obj, 'dim', 4096)
+    n_kv_heads = getattr(config_obj, 'n_kv_heads', None)
+    if n_kv_heads is None:
+        n_kv_heads = n_head
+    block_size = getattr(config_obj, 'max_seq_len', 4096)
+    norm_eps = getattr(config_obj, 'norm_eps', 1e-5)
     
-    # Let's assume standard GPT-2 config for now, user can adjust.
-    # We try to infer from config_obj if available.
-    
-    vocab_size = 50304 # Default nanoGPT
-    n_layer = 12
-    n_head = 12
-    n_embd = 768
-    block_size = 1024
-    
-    if config_obj:
-        # Try to extract attributes
-        vocab_size = getattr(config_obj, 'vocab_size', vocab_size)
-        n_layer = getattr(config_obj, 'n_layer', n_layer)
-        n_head = getattr(config_obj, 'n_head', n_head)
-        n_embd = getattr(config_obj, 'n_embd', n_embd)
-        block_size = getattr(config_obj, 'block_size', getattr(config_obj, 'max_seq_len', block_size))
-    
-    print(f"Inferred Config: vocab_size={vocab_size}, n_layer={n_layer}, n_head={n_head}, n_embd={n_embd}, ctx={block_size}")
-    
-    ***REMOVED***config = GPT2Config(
-        vocab_size=vocab_size,
-        n_positions=block_size,
-        n_ctx=block_size,
-        n_embd=n_embd,
-        n_layer=n_layer,
-        n_head=n_head,
-        activation_function="gelu_new", # or swiglu if llama
-        resid_pdrop=0.0,
-        embd_pdrop=0.0,
-        attn_pdrop=0.0,
-        use_cache=True
-    )
-    
-    ***REMOVED***model = GPT2LMHeadModel(***REMOVED***config)
-    
-    # Map weights
-    # Custom GPT usually has:
-    # transformer.wte.weight -> wte.weight
-    # transformer.wpe.weight -> wpe.weight
-    # transformer.h.0.ln_1.weight -> h.0.ln_1.weight
-    # ...
-    
-    # We need to inspect keys to map correctly.
-    # Let's do a naive mapping and print mismatches.
-    
-    ***REMOVED***sd = ***REMOVED***model.state_dict()
-    new_sd = {}
-    
-    # Remove "module." prefix if DDP
     clean_sd = {}
     for k, v in state_dict.items():
         if k.startswith("module."):
             clean_sd[k[7:]] = v
         else:
             clean_sd[k] = v
-            
-    # Mapping rules (adjust based on src/model.py)
-    # Assuming nanoGPT style:
-    # transformer.wte.weight -> transformer.wte.weight
-    # transformer.wpe.weight -> transformer.wpe.weight
-    # transformer.h.N... -> transformer.h.N...
-    # lm_head.weight -> lm_head.weight
     
-    # If our model uses "transformer" prefix, it might match HF GPT2.
+    ffn_hidden_dim = None
+    if "layers.0.feed_forward.w1.weight" in clean_sd:
+        ffn_hidden_dim = clean_sd["layers.0.feed_forward.w1.weight"].shape[0]
     
-    keys_matched = 0
-    for k, v in clean_sd.items():
-        if k in ***REMOVED***sd:
-            if ***REMOVED***sd[k].shape == v.shape:
-                new_sd[k] = v
-                keys_matched += 1
-            else:
-                print(f"Shape mismatch for {k}: HF {***REMOVED***sd[k].shape} vs Ckpt {v.shape}")
-                # Handle Transpose for Conv1D if needed (GPT2 uses Conv1D)
-                if len(***REMOVED***sd[k].shape) == 2 and len(v.shape) == 2 and ***REMOVED***sd[k].shape == v.T.shape:
-                    new_sd[k] = v.T
-                    print(f"  -> Transposed {k}")
-                    keys_matched += 1
+    if ffn_hidden_dim is None:
+        hidden_dim = 4 * n_embd
+        hidden_dim = int(2 * hidden_dim / 3)
+        ffn_dim_multiplier = getattr(config_obj, 'ffn_dim_multiplier', None)
+        if ffn_dim_multiplier is not None:
+            hidden_dim = int(ffn_dim_multiplier * hidden_dim)
+        multiple_of = getattr(config_obj, 'multiple_of', 256)
+        ffn_hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
+    
+    print(f"\nModel Configuration:")
+    print(f"  vocab_size:     {vocab_size}")
+    print(f"  n_layers:       {n_layer}")
+    print(f"  n_heads:        {n_head}")
+    print(f"  n_kv_heads:     {n_kv_heads}")
+    print(f"  dim:            {n_embd}")
+    print(f"  ffn_hidden_dim: {ffn_hidden_dim}")
+    print(f"  max_seq_len:    {block_size}")
+    print(f"  norm_eps:       {norm_eps}")
+    
+    # Create HuggingFace Llama config
+    config = LlamaConfig(
+        vocab_size=vocab_size,
+        hidden_size=n_embd,
+        intermediate_size=ffn_hidden_dim,
+        num_hidden_layers=n_layer,
+        num_attention_heads=n_head,
+        num_key_value_heads=n_kv_heads,
+        max_position_embeddings=block_size,
+        rms_norm_eps=norm_eps,
+        tie_word_embeddings=True,
+        rope_theta=10000.0,
+    )
+    
+    print(f"\nCreating HuggingFace LlamaForCausalLM model...")
+    hf_model = LlamaForCausalLM(config)
+    hf_state_dict = hf_model.state_dict()
+    
+    # Remove "module." prefix if present (DDP)
+    clean_sd = {}
+    for k, v in state_dict.items():
+        if k.startswith("module."):
+            clean_sd[k[7:]] = v
         else:
-            print(f"Key not found in HF model: {k}")
+            clean_sd[k] = v
+    
+    new_sd = {}
+    
+    print(f"\nMapping weights...")
+    
+    if "tok_embeddings.weight" in clean_sd:
+        new_sd["model.embed_tokens.weight"] = clean_sd["tok_embeddings.weight"]
+        new_sd["lm_head.weight"] = clean_sd["tok_embeddings.weight"]  # Tied weights
+        print("  ✓ Mapped embeddings")
+    
+    if "norm.weight" in clean_sd:
+        new_sd["model.norm.weight"] = clean_sd["norm.weight"]
+        print("  ✓ Mapped final norm")
+    
+    for i in range(n_layer):
+        layer_prefix_custom = f"layers.{i}"
+        layer_prefix_hf = f"model.layers.{i}"
+        
+        mappings = {
+            f"{layer_prefix_custom}.attention.wq.weight": f"{layer_prefix_hf}.self_attn.q_proj.weight",
+            f"{layer_prefix_custom}.attention.wk.weight": f"{layer_prefix_hf}.self_attn.k_proj.weight",
+            f"{layer_prefix_custom}.attention.wv.weight": f"{layer_prefix_hf}.self_attn.v_proj.weight",
+            f"{layer_prefix_custom}.attention.wo.weight": f"{layer_prefix_hf}.self_attn.o_proj.weight",
             
-    print(f"Matched {keys_matched} / {len(***REMOVED***sd)} keys.")
+            f"{layer_prefix_custom}.feed_forward.w1.weight": f"{layer_prefix_hf}.mlp.gate_proj.weight",
+            f"{layer_prefix_custom}.feed_forward.w3.weight": f"{layer_prefix_hf}.mlp.up_proj.weight",
+            f"{layer_prefix_custom}.feed_forward.w2.weight": f"{layer_prefix_hf}.mlp.down_proj.weight",
+
+            f"{layer_prefix_custom}.attention_norm.weight": f"{layer_prefix_hf}.input_layernorm.weight",
+            f"{layer_prefix_custom}.ffn_norm.weight": f"{layer_prefix_hf}.post_attention_layernorm.weight",
+        }
+        
+        for custom_key, hf_key in mappings.items():
+            if custom_key in clean_sd:
+                new_sd[hf_key] = clean_sd[custom_key]
+        
+        if i == 0:
+            print(f"  ✓ Mapped layer 0 (showing first layer only)")
     
-    # Load
-    missing, unexpected = ***REMOVED***model.load_state_dict(new_sd, strict=False)
-    print(f"Missing keys: {len(missing)}")
-    print(f"Unexpected keys: {len(unexpected)}")
+    print(f"  ✓ Mapped all {n_layer} layers")
     
-    # Save
+    missing, unexpected = hf_model.load_state_dict(new_sd, strict=False)
+    
+    print(f"\nWeight loading summary:")
+    print(f"  Total keys mapped: {len(new_sd)}")
+    print(f"  Missing keys: {len(missing)}")
+    print(f"  Unexpected keys: {len(unexpected)}")
+    
+    if missing:
+        print(f"\n  Missing keys (first 5): {missing[:5]}")
+    if unexpected:
+        print(f"\n  Unexpected keys (first 5): {unexpected[:5]}")
+    
     os.makedirs(output_dir, exist_ok=True)
-    ***REMOVED***model.save_pretrained(output_dir)
-    print(f"Saved HF model to {output_dir}")
+    hf_model.save_pretrained(output_dir)
     
-    # Save tokenizer if path provided?
-    # User can just copy tokenizer.json
+    print(f"\n✅ Successfully saved HuggingFace model to {output_dir}")
+    print(f"\nTo use this model:")
+    print(f"  from transformers import LlamaForCausalLM")
+    print(f"  model = LlamaForCausalLM.from_pretrained('{output_dir}')")
+    
+    return hf_model
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Convert custom Llama-style checkpoint to HuggingFace format")
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to .pt checkpoint")
     parser.add_argument("--output_dir", type=str, required=True, help="Output HF directory")
     args = parser.parse_args()

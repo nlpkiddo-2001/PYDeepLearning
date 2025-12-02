@@ -8,7 +8,6 @@ from transformers import AutoTokenizer
 
 
 def estimate_tokens(text):
-    # Rough estimation: 1 token ~= 4 characters
     return len(text) // 4
 
 def main():
@@ -20,7 +19,7 @@ def main():
     args = parser.parse_args()
 
     if args.dry_run:
-        args.token_limit = 1_000_000  # 1M tokens for dry run
+        args.token_limit = 1_000_000  # sample test case
         print("--- DRY RUN MODE ACTIVATED ---")
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -77,7 +76,6 @@ def main():
                 if not text:
                     continue
                 
-                # Count tokens
                 if tokenizer:
                     tokens = len(tokenizer.encode(text))
                 else:
@@ -95,7 +93,6 @@ def main():
         except Exception as e:
             print(f"Error processing {ds_name}: {e}")
 
-    # Save remaining buffer
     if buffer:
         save_chunk(buffer, file_index)
         print(f"Saved final chunk {file_index}")

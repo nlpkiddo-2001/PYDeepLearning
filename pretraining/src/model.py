@@ -2,6 +2,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from dataclasses import dataclass
 
 @dataclass
@@ -10,12 +11,13 @@ class ModelConfig:
     dim: int = 4096
     n_layers: int = 32
     n_heads: int = 32
-    n_kv_heads: int = None  # For GQA, if None then n_kv_heads = n_heads
-    multiple_of: int = 256  # Make SwiGLU hidden layer size multiple of large power of 2
+    n_kv_heads: int = None 
+    multiple_of: int = 256  
     ffn_dim_multiplier: float = None
     norm_eps: float = 1e-5
     max_seq_len: int = 4096
     dropout: float = 0.0
+    gradient_checkpointing: bool = False
 
 class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
@@ -76,15 +78,10 @@ class Attention(nn.Module):
 
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis)
 
-        # GQA: repeat k/v heads if n_kv_heads < n_heads
-        # PyTorch 2.0 scaled_dot_product_attention handles this efficiently if we broadcast?
-        # Actually for GQA we usually repeat explicitly or use specific kernels.
-        # For simplicity and F.sdpa compatibility, let's expand if needed.
         if self.n_kv_heads != self.n_heads:
              xk = torch.repeat_interleave(xk, self.n_heads // self.n_kv_heads, dim=2)
              xv = torch.repeat_interleave(xv, self.n_heads // self.n_kv_heads, dim=2)
         
-        # Transpose for F.sdpa: (bsz, n_heads, seqlen, head_dim)
         xq = xq.transpose(1, 2)
         xk = xk.transpose(1, 2)
         xv = xv.transpose(1, 2)
@@ -147,10 +144,8 @@ class GPT(nn.Module):
         self.norm = RMSNorm(args.dim, eps=args.norm_eps)
         self.output = nn.Linear(args.dim, args.vocab_size, bias=False)
         
-        # Weight sharing
         self.tok_embeddings.weight = self.output.weight
 
-        # Precompute freqs_cis for RoPE
         self.freqs_cis = precompute_freqs_cis(
             self.args.dim // self.args.n_heads, self.args.max_seq_len * 2
         )
@@ -159,11 +154,14 @@ class GPT(nn.Module):
         bsz, seqlen = tokens.shape
         h = self.tok_embeddings(tokens)
         
-        # Retrieve precomputed freqs_cis and move to device
+       
         freqs_cis = self.freqs_cis[:seqlen].to(h.device)
         
         for layer in self.layers:
-            h = layer(h, freqs_cis)
+            if self.args.gradient_checkpointing and self.training:
+                h = checkpoint(layer, h, freqs_cis, use_reentrant=False)
+            else:
+                h = layer(h, freqs_cis)
             
         h = self.norm(h)
         logits = self.output(h)
