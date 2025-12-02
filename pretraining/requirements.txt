@@ -1,0 +1,11 @@
+datasets
+transformers
+apache_beam
+zstandard
+pyarrow
+huggingface_hub
+langdetect
+matplotlib
+pandas
+tqdm
+PyYAML
