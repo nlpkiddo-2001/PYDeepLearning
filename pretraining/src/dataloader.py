@@ -8,25 +8,18 @@ from typing import List, Optional, Iterator
 
 class DistributedDataLoader:
     """
-    Distributed Data Loader for LLM Pretraining
-    Supports both binary packed data (.bin) and raw text data (.jsonl, .txt) with on-the-fly tokenization.
-    
-    Args:
-        data_dir: Directory containing data files
-        tokenizer_path: Path to tokenizer file (required for raw data)
-        tokenizer: Optional pre-loaded tokenizer instance
-        rank: GPU rank (0 to world_size-1)
-        world_size: Total number of GPUs
-        batch_size: Number of sequences per batch
-        context_window: Maximum sequence length (tokens)
-        device: Target device (e.g., 'cuda:0')
+    Distributed Data Loader for LLM Pretraining and Fine-tuning
+    Supports:
+    - Binary packed data (.bin)
+    - Raw text data (.jsonl with 'text' or 'content' fields)
+    - Conversational data (.jsonl with 'messages' field)
     """
     
     def __init__(
         self,
         data_dir: str,
         tokenizer_path: str,
-        tokenizer=None, # Optional pre-loaded tokenizer
+        tokenizer=None,
         rank: int = 0,
         world_size: int = 1,
         batch_size: int = 8,
@@ -117,38 +110,98 @@ class DistributedDataLoader:
         if self.current_file_idx == 0:
             random.shuffle(self.files)
 
+    def _format_messages_to_text(self, messages: list) -> str:
+        """
+        Convert messages format to a single text string for tokenization.
+        Format: <|user|>user_msg<|assistant|>assistant_msg<|endoftext|>
+        """
+        formatted_parts = []
+        
+        for msg in messages:
+            role = msg.get('role', '')
+            content = msg.get('content', '')
+            
+            if role == 'user':
+                formatted_parts.append(f"<|user|>\n{content}")
+            elif role == 'assistant':
+                formatted_parts.append(f"<|assistant|>\n{content}")
+            elif role == 'system':
+                formatted_parts.append(f"<|system|>\n{content}")
+        
+        # Join all parts and add end token
+        return "\n".join(formatted_parts) + "\n<|endoftext|>"
+
     def _load_raw_file(self, filename: str):
         """Read raw text file, tokenize, and fill buffer"""
         if self.tokenizer is None:
             raise RuntimeError("Tokenizer is required for loading raw files but was not initialized.")
-            
         
         new_tokens = []
         eos_id = self.tokenizer.token_to_id("<|endoftext|>")
         
+        # Handle case where special tokens might not exist
+        if eos_id is None:
+            print(f"[Rank {self.rank}] Warning: <|endoftext|> token not found, using 0")
+            eos_id = 0
+        
+        lines_processed = 0
+        lines_skipped = 0
+        
         try:
             with open(filename, 'r', encoding='utf-8') as f:
-                for line in f:
+                for line_num, line in enumerate(f):
                     text = ""
+                    
                     if filename.endswith('.jsonl'):
                         try:
                             data = json.loads(line)
-                            text = data.get('text', '') or data.get('content', '')
-                        except:
+                            
+                            # CRITICAL FIX: Handle 'messages' format
+                            if 'messages' in data:
+                                text = self._format_messages_to_text(data['messages'])
+                            # Fallback to text/content format
+                            elif 'text' in data or 'content' in data:
+                                text = data.get('text', '') or data.get('content', '')
+                            else:
+                                lines_skipped += 1
+                                continue
+                                
+                        except json.JSONDecodeError as e:
+                            if self.rank == 0 and line_num < 5:
+                                print(f"[Rank {self.rank}] JSON decode error on line {line_num}: {e}")
+                            lines_skipped += 1
                             continue
                     else:
+                        # Plain text files
                         text = line
                     
                     if not text.strip():
+                        lines_skipped += 1
+                        continue
+                    
+                    # Encode
+                    try:
+                        encoded = self.tokenizer.encode(text)
+                        new_tokens.extend(encoded.ids)
+                        new_tokens.append(eos_id)
+                        lines_processed += 1
+                    except Exception as e:
+                        if self.rank == 0 and line_num < 5:
+                            print(f"[Rank {self.rank}] Encoding error on line {line_num}: {e}")
+                        lines_skipped += 1
                         continue
                         
-                    # Encode
-                    encoded = self.tokenizer.encode(text)
-                    new_tokens.extend(encoded.ids)
-                    new_tokens.append(eos_id)
-                    
         except Exception as e:
             print(f"[Rank {self.rank}] Error reading {filename}: {e}")
+        
+        if self.rank == 0:
+            print(f"[Rank {self.rank}] Loaded {filename}:")
+            print(f"  - Lines processed: {lines_processed}")
+            print(f"  - Lines skipped: {lines_skipped}")
+            print(f"  - Total tokens: {len(new_tokens):,}")
+            
+            if len(new_tokens) == 0:
+                print(f"  ⚠️  WARNING: No tokens extracted from file!")
             
         self.current_data = np.array(new_tokens, dtype=np.uint16)
         self.current_pos = 0
@@ -167,9 +220,9 @@ class DistributedDataLoader:
         
         while len(input_list) < self.batch_size:
             if self.current_data is None or len(self.current_data) == 0:
-
                 self._load_next_file()
                 if self.current_data is None or len(self.current_data) == 0:
+                    print(f"[Rank {self.rank}] ⚠️  WARNING: Returning zero tensors - no data available!")
                     return torch.zeros((self.batch_size, self.context_window), dtype=torch.long), torch.zeros((self.batch_size, self.context_window), dtype=torch.long)
 
             if self.current_pos + req_len > len(self.current_data):
