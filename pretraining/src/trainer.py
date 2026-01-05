@@ -141,28 +141,55 @@ class Trainer:
                 f"  Number of invalid tokens: {num_invalid}"
             )
 
+    # def train_step(self):
+    #     try:
+    #         input_ids, targets = next(self.loader)
+    #     except StopIteration:
+    #         return None
+        
+    #     self.validate_tokens(input_ids, targets)
+            
+    #     with self.ctx:
+    #         logits, loss = self.model(input_ids, targets)
+    #         loss = loss / self.grad_accum_steps
+            
+    #     loss.backward()
+        
+    #     loss_val = loss.item()
+        
+    #     if loss_val == 0.0:
+    #         print(f"[Rank {self.gpu_id}] WARNING: Loss is exactly 0.0!")
+    #         if (targets == -100).all():
+    #              print(f"[Rank {self.gpu_id}] All targets are -100 (ignore_index). This explains 0 loss.")
+        
+    #     return loss_val
+
     def train_step(self):
         try:
             input_ids, targets = next(self.loader)
         except StopIteration:
             return None
+    
+        if self.gpu_id == 0:
+            print(f"Input IDs shape: {input_ids.shape}")
+            print(f"Input IDs sample: {input_ids[0, :10]}") 
+            print(f"Targets sample: {targets[0, :10]}")
+            print(f"Unique input IDs: {torch.unique(input_ids).numel()}")
+            print(f"Unique targets: {torch.unique(targets).numel()}")
         
         self.validate_tokens(input_ids, targets)
-            
+        
         with self.ctx:
             logits, loss = self.model(input_ids, targets)
             loss = loss / self.grad_accum_steps
-            
+        
+        if self.gpu_id == 0 and loss.item() == 0.0:
+            print(f"Logits shape: {logits.shape}")
+            print(f"Logits sample: {logits[0, 0, :10]}")
+            print(f"Cross entropy manually: {F.cross_entropy(logits.view(-1, self.vocab_size), targets.view(-1))}")
+        
         loss.backward()
-        
-        loss_val = loss.item()
-        
-        if loss_val == 0.0:
-            print(f"[Rank {self.gpu_id}] WARNING: Loss is exactly 0.0!")
-            if (targets == -100).all():
-                 print(f"[Rank {self.gpu_id}] All targets are -100 (ignore_index). This explains 0 loss.")
-        
-        return loss_val
+        return loss.item()
 
     def save_checkpoint(self, step):
         if self.gpu_id != 0:
@@ -222,7 +249,7 @@ class Trainer:
                 
                 if loss_val is not None:
                     accum_loss += loss_val
-            
+
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             
             if isinstance(self.optimizer, list):
