@@ -263,3 +263,119 @@ class DistributedDataLoader:
         if new_context_window != self.context_window:
             print(f"[Rank {self.rank}] Updating context window: {self.context_window} -> {new_context_window}")
             self.context_window = new_context_window
+
+
+class MixedDataLoader:
+    """
+    Mixed Data Loader for Midtraining.
+    Samples from multiple datasets based on specified weights.
+    
+    Example config:
+        datasets:
+          - name: "C4"
+            path: "./data/midtraining/c4"
+            weight: 0.80
+          - name: "Starcoder"
+            path: "./data/midtraining/starcoder"
+            weight: 0.04
+    """
+    
+    def __init__(
+        self,
+        datasets_config: List[dict],
+        tokenizer_path: str,
+        tokenizer=None,
+        rank: int = 0,
+        world_size: int = 1,
+        batch_size: int = 8,
+        context_window: int = 4096,
+        device: Optional[str] = None
+    ):
+        self.rank = rank
+        self.world_size = world_size
+        self.batch_size = batch_size
+        self.context_window = context_window
+        self.device = device if device else (f'cuda:{rank}' if torch.cuda.is_available() else 'cpu')
+        
+        self.dataset_names = []
+        self.weights = []
+        self.loaders = []
+        
+        total_weight = sum(d.get('weight', 1.0) for d in datasets_config)
+        
+        for ds_config in datasets_config:
+            name = ds_config.get('name', 'unnamed')
+            path = ds_config['path']
+            weight = ds_config.get('weight', 1.0) / total_weight
+            
+            self.dataset_names.append(name)
+            self.weights.append(weight)
+            
+            if not os.path.exists(path):
+                if rank == 0:
+                    print(f"[MixedDataLoader] WARNING: Dataset path does not exist: {path}")
+                self.loaders.append(None)
+                continue
+            
+            loader = DistributedDataLoader(
+                data_dir=path,
+                tokenizer_path=tokenizer_path,
+                tokenizer=tokenizer,
+                rank=rank,
+                world_size=world_size,
+                batch_size=batch_size,
+                context_window=context_window,
+                device=device
+            )
+            self.loaders.append(loader)
+        
+        # Normalize weights for valid loaders only
+        valid_indices = [i for i, l in enumerate(self.loaders) if l is not None]
+        if not valid_indices:
+            raise ValueError("No valid datasets found in MixedDataLoader config!")
+        
+        valid_weight_sum = sum(self.weights[i] for i in valid_indices)
+        self.normalized_weights = [self.weights[i] / valid_weight_sum if i in valid_indices else 0.0 for i in range(len(self.loaders))]
+        
+        if rank == 0:
+            print(f"[MixedDataLoader] Initialized with {len(valid_indices)} datasets:")
+            for i in valid_indices:
+                print(f"  - {self.dataset_names[i]}: {self.normalized_weights[i]*100:.1f}%")
+        
+        self.batches_produced = 0
+    
+    def _sample_loader_index(self) -> int:
+        """Sample a loader index based on weights."""
+        return random.choices(range(len(self.loaders)), weights=self.normalized_weights, k=1)[0]
+    
+    def __iter__(self):
+        return self
+    
+    def __next__(self) -> tuple[torch.Tensor, torch.Tensor]:
+        idx = self._sample_loader_index()
+        loader = self.loaders[idx]
+        
+        if loader is None:
+            # Fallback: find a valid loader
+            for i, l in enumerate(self.loaders):
+                if l is not None:
+                    loader = l
+                    break
+        
+        input_ids, target_ids = next(loader)
+        self.batches_produced += 1
+        return input_ids, target_ids
+    
+    def set_batch_size(self, new_batch_size: int):
+        """Update batch size for all loaders."""
+        self.batch_size = new_batch_size
+        for loader in self.loaders:
+            if loader is not None:
+                loader.set_batch_size(new_batch_size)
+    
+    def set_context_window(self, new_context_window: int):
+        """Update context window for all loaders."""
+        self.context_window = new_context_window
+        for loader in self.loaders:
+            if loader is not None:
+                loader.set_context_window(new_context_window)

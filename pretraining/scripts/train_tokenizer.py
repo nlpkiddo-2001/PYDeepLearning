@@ -100,6 +100,9 @@ def main():
     special_tokens = [
         "<|endoftext|>",
         "<|padding|>",
+        "<|user|>",
+        "<|assistant|>",
+        "<|system|>"
     ]
     
     trainer = trainers.BpeTrainer(
