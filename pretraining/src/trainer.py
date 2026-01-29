@@ -111,7 +111,7 @@ class Trainer:
 
     def validate_tokens(self, input_ids, targets):
         if self.vocab_size is None:
-            return  # Skip validation if vocab_size not set
+            return
         
         invalid_mask = (input_ids < 0) | (input_ids >= self.vocab_size)
         if invalid_mask.any():
