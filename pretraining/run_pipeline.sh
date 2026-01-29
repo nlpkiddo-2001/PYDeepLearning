@@ -8,121 +8,117 @@ mkdir -p ./checkpoints/pretrain
 mkdir -p ./checkpoints/midtrain
 mkdir -p ./checkpoints/finetune
 
+
 echo "=================================================================="
-echo "LLM Training Pipeline - YAML Configuration Mode"
+echo "LLM Training Pipeline - Automated & Configurable"
 echo "=================================================================="
-echo "This pipeline will run all three training stages:"
-echo "  1. Pre-training (from scratch)"
-echo "  2. Mid-training (continued training on domain data)"
-echo "  3. Fine-tuning (supervised instruction tuning)"
-echo ""
-echo "Each stage uses its own YAML config file:"
-echo "  - config.pretrain.yaml"
-echo "  - config.midtrain.yaml"
-echo "  - config.finetune.yaml"
-echo "=================================================================="
+echo "This pipeline runs: Pre-training -> Mid-training -> Fine-tuning"
 echo ""
 
-if [ ! -f "config.pretrain.yaml" ]; then
-    echo "Error: config.pretrain.yaml not found!"
-    exit 1
-fi
+# Ensure configs exist
+for config in config.pretrain.yaml config.midtrain.yaml config.finetune.yaml; do
+    if [ ! -f "$config" ]; then
+        echo "Error: $config not found!"
+        exit 1
+    fi
+done
 
-if [ ! -f "config.midtrain.yaml" ]; then
-    echo "Error: config.midtrain.yaml not found!"
-    exit 1
-fi
-
-if [ ! -f "config.finetune.yaml" ]; then
-    echo "Error: config.finetune.yaml not found!"
-    exit 1
-fi
-
+# --- PRE-TRAINING ---
 echo "=================================================================="
 echo "STEP 1: PRE-TRAINING"
 echo "=================================================================="
-echo "Using config: config.pretrain.yaml"
-echo "Starting pre-training from scratch..."
-echo ""
+
+# Check for pre-training data
+if [ ! -d "./data/pretraining" ] || [ -z "$(ls -A ./data/pretraining)" ]; then
+    echo "Pre-training data not found. Downloading..."
+    # Note: data_pretraining.py seems to be designed for local dry-runs or full downloads.
+    # Assuming standard usage without args downloads full set or as configured in script.
+    python scripts/data_pretraining.py --output_dir ./data/pretraining
+else
+    echo "Pre-training data found."
+fi
+
+echo "Starting pre-training..."
+# Check for existing checkpoint to potentially resume (handled by main.py but good to log)
+LATEST_PRETRAIN=$(ls -t ./checkpoints/pretrain/step_*.pt 2>/dev/null | head -1 || echo "")
+if [ -n "$LATEST_PRETRAIN" ]; then
+    echo "Resuming pre-training from: $LATEST_PRETRAIN"
+fi
 
 torchrun --nproc_per_node=$NUM_GPUS src/main.py --config config.pretrain.yaml
 
-echo ""
 echo "Pre-training complete!"
 echo ""
 
+
+# --- MID-TRAINING ---
 echo "=================================================================="
 echo "STEP 2: MID-TRAINING"
 echo "=================================================================="
-echo "Using config: config.midtrain.yaml"
-echo "Note: Make sure config.midtrain.yaml has the correct 'resume_from' path"
-echo ""
 
-LATEST_PRETRAIN=$(ls -t ./checkpoints/pretrain/step_*.pt 2>/dev/null | head -1 || echo "")
-if [ -n "$LATEST_PRETRAIN" ]; then
-    echo "Found latest pretrain checkpoint: $LATEST_PRETRAIN"
-    echo "You may want to update config.midtrain.yaml to use this checkpoint"
+# Check for mid-training data
+# Midtraining data is scattered in subfolders, check specifically for one key folder or if base exists
+if [ ! -d "./data/midtraining" ]; then
+    echo "Mid-training data not found. Downloading..."
+    python src/download_datasets.py --stage midtrain --config config.midtrain.yaml --max_samples 100000
 else
-    echo "Warning: No pretrain checkpoint found. Make sure to set resume_from in config.midtrain.yaml"
+    echo "Mid-training data found."
 fi
-echo ""
 
+# Resume logic: Midtraining MUST resume from Pretraining result if starting fresh mid-train
+# or resume from its own checkpoint if continuing.
+# main.py handles 'auto' resume, but we need to ensure the transition from pretrain -> midtrain works.
+# If midtrain checkpoint exists, main.py picks it up.
+# If NOT, main.py looks for pretrain checkpoint because config.midtrain.yaml has resume_from: "auto".
+# We just enforce execution.
+
+echo "Starting mid-training..."
 torchrun --nproc_per_node=$NUM_GPUS src/main.py --config config.midtrain.yaml
 
-echo ""
 echo "Mid-training complete!"
 echo ""
 
+
+# --- FINE-TUNING ---
 echo "=================================================================="
 echo "STEP 3: FINE-TUNING"
 echo "=================================================================="
-echo "Using config: config.finetune.yaml"
-echo "Note: Make sure config.finetune.yaml has the correct 'resume_from' path"
-echo ""
 
-LATEST_MIDTRAIN=$(ls -t ./checkpoints/midtrain/step_*.pt 2>/dev/null | head -1 || echo "")
-if [ -n "$LATEST_MIDTRAIN" ]; then
-    echo "Found latest midtrain checkpoint: $LATEST_MIDTRAIN"
-    echo "You may want to update config.finetune.yaml to use this checkpoint"
+# Check for SFT data
+if [ ! -d "./data/sft" ] || [ -z "$(ls -A ./data/sft)" ]; then
+    echo "SFT data not found. Downloading..."
+    python src/download_datasets.py --stage sft --output_dir ./data
 else
-    echo "Warning: No midtrain checkpoint found. Make sure to set resume_from in config.finetune.yaml"
+    echo "SFT data found."
 fi
-echo ""
 
+echo "Starting fine-tuning..."
 torchrun --nproc_per_node=$NUM_GPUS src/main.py --config config.finetune.yaml
 
-echo ""
 echo "Fine-tuning complete!"
 echo ""
 
+
+# --- HF EXPORT ---
 echo "=================================================================="
 echo "STEP 4: EXPORT TO HUGGING FACE (Optional)"
 echo "=================================================================="
 FINETUNE_CKPT=$(ls -t ./checkpoints/finetune/step_*.pt 2>/dev/null | head -1 || echo "")
 
-if [ -z "$FINETUNE_CKPT" ]; then
-    echo "No finetune checkpoint found. Skipping HF export."
+if [ -n "$FINETUNE_CKPT" ] && [ -f "scripts/convert_to_hf.py" ]; then
+    echo "Exporting model from $FINETUNE_CKPT..."
+    python scripts/convert_to_hf.py \
+        --checkpoint "$FINETUNE_CKPT" \
+        --output_dir "./checkpoints/hf_model"
+    echo "Model exported to ./checkpoints/hf_model"
 else
-    echo "Found checkpoint: $FINETUNE_CKPT"
-    
-    if [ -f "scripts/convert_to_hf.py" ]; then
-        echo "Converting to Hugging Face format..."
-        python scripts/convert_to_hf.py \
-            --checkpoint "$FINETUNE_CKPT" \
-            --output_dir "./checkpoints/hf_model"
-        echo "Model exported to ./checkpoints/hf_model"
-    else
-        echo "scripts/convert_to_hf.py not found. Skipping HF export."
-    fi
+    echo "Skipping export (Checkpoint or script missing)."
 fi
 
 echo ""
 echo "=================================================================="
-echo "PIPELINE COMPLETE!"
+echo "PIPELINE SUMMARY"
 echo "=================================================================="
-echo "Checkpoints saved in:"
-echo "  - ./checkpoints/pretrain/"
-echo "  - ./checkpoints/midtrain/"
-echo "  - ./checkpoints/finetune/"
-echo "=================================================================="
+echo "Completed all stages."
+
 

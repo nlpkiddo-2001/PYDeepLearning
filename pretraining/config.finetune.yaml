@@ -1,6 +1,6 @@
 stage: "finetune"
 
-data_dir: "./data/finetuning"
+data_dir: "./data/sft"
 output_dir: "./checkpoints/finetune"
 
 resume_from: "auto"              

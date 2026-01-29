@@ -10,7 +10,7 @@ from tokenizers import Tokenizer
 
 from model import GPT, ModelConfig
 from trainer import Trainer
-from dataloader import DistributedDataLoader
+from dataloader import DistributedDataLoader, MixedDataLoader
 from muon import Muon
 
 torch.serialization.add_safe_globals([ModelConfig]) # torch 2.6.0+ requires this
@@ -251,15 +251,30 @@ def main():
             if rank == 0:
                 print(f"Checkpoint {config['resume_from']} not found! Starting from scratch.")
 
-    loader = DistributedDataLoader(
-        data_dir=config['data_dir'],
-        tokenizer_path=tokenizer_path,
-        tokenizer=tokenizer,
-        rank=rank,
-        world_size=world_size,
-        batch_size=config['batch_size'],
-        context_window=config['context_window']
-    )
+    # Use MixedDataLoader if 'datasets' config is present (for midtraining)
+    if 'datasets' in config and config['datasets']:
+        if rank == 0:
+            print(f"Using MixedDataLoader with {len(config['datasets'])} datasets")
+        loader = MixedDataLoader(
+            datasets_config=config['datasets'],
+            tokenizer_path=tokenizer_path,
+            tokenizer=tokenizer,
+            rank=rank,
+            world_size=world_size,
+            batch_size=config['batch_size'],
+            context_window=config['context_window']
+        )
+    else:
+        # Standard single-directory loader for pretrain/finetune
+        loader = DistributedDataLoader(
+            data_dir=config['data_dir'],
+            tokenizer_path=tokenizer_path,
+            tokenizer=tokenizer,
+            rank=rank,
+            world_size=world_size,
+            batch_size=config['batch_size'],
+            context_window=config['context_window']
+        )
     
     if config.get('use_muon', False):
         muon_params = []
@@ -332,9 +347,18 @@ def main():
             elif isinstance(ckpt_config, dict):
                 ckpt_stage = ckpt_config.get('stage')
         
-        if ckpt_stage == config.get('stage'):
-            if rank == 0:
-                print(f"Resuming training state for stage {config['stage']}")
+        # For midtraining: force resume training state from pretrain checkpoint
+        # This treats midtraining as a continuation, not a fresh start
+        is_midtrain_from_pretrain = (config.get('stage') == 'midtrain' and ckpt_stage == 'pretrain')
+        
+        if ckpt_stage == config.get('stage') or is_midtrain_from_pretrain:
+            if is_midtrain_from_pretrain:
+                if rank == 0:
+                    print(f"[MIDTRAINING] Resuming training state from pretrain checkpoint")
+                    print(f"[MIDTRAINING] Optimizer and scheduler states will be preserved")
+            else:
+                if rank == 0:
+                    print(f"Resuming training state for stage {config['stage']}")
             
             if isinstance(optimizer, list):
                 if isinstance(checkpoint.get("optimizer"), list):
@@ -356,7 +380,7 @@ def main():
                 print(f"Resuming from step {start_step}")
         else:
             if rank == 0:
-                print(f"Starting new stage {config.get('stage')} from checkpoint weights")
+                print(f"Starting new stage {config.get('stage')} from checkpoint weights (not resuming training state)")
     
     trainer = Trainer(
         config=model_config,
