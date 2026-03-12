@@ -1,0 +1,11 @@
+# AgentForge ignores
+__pycache__/
+*.pyc
+.env
+data/
+logs/
+*.db
+node_modules/
+.next/
+dist/
+.venv/

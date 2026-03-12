@@ -1,5 +1,11 @@
 stage: "finetune"
 
+wandb:
+  enabled: true
+  entity: "vipinsaravana"
+  project: "H200 Pretrain"
+  name: null
+
 data_dir: "./data/sft"
 output_dir: "./checkpoints/finetune"
 

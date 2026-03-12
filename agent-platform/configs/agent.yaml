@@ -1,0 +1,151 @@
+# AgentForge — Agent Configuration
+# This file defines the default configuration for all agents.
+# Individual agents can override these settings in their own YAML files.
+
+# ─────────────────────────────────────────────────
+# LLM Provider Configuration
+# ─────────────────────────────────────────────────
+llm:
+  provider: "gemini"              # openai | anthropic | ollama | custom | vllm | gemini
+  model: "gemini-3-flash-preview"
+  api_key: ""
+  temperature: 0.3
+  max_tokens: 64000
+
+# ─────────────────────────────────────────────────
+# Available Provider Profiles (for UI switcher)
+# ─────────────────────────────────────────────────
+providers:
+  gemini:
+    provider: "gemini"
+    model: "gemini-3-flash-preview"
+    api_key: ""
+    temperature: 0.3
+    max_tokens: 128000
+  vllm:
+    provider: "vllm"
+    model: "glm-5"
+    base_url: ""
+    jwt_secret: ""
+    jwt_algorithm: ""
+    jwt_expiry_minutes: 10
+    temperature: 0.3
+    max_tokens: 128000
+    chat_template_kwargs:
+      enable_thinking: false
+
+# ─────────────────────────────────────────────────
+# Memory Configuration
+# ─────────────────────────────────────────────────
+memory:
+  short_term:
+    backend: "sqlite"
+    db_path: "./data/memory.db"
+    max_history: 50             # max conversation turns kept
+  long_term:
+    backend: "chroma"           # chroma | faiss
+    persist_dir: "./data/chroma_store"
+    collection_prefix: "agent"
+
+# ─────────────────────────────────────────────────
+# Tool System
+# ─────────────────────────────────────────────────
+tools:
+  auto_discover: true           # auto-discover @tool decorated functions
+  tool_dirs:
+    - "tools/"
+  enabled:
+    - "web_search"
+    - "scrape_url"
+    - "send_email"
+    - "http_request"
+    - "read_file"
+    - "write_file"
+    - "query_database"
+    # Job hunting tools
+    - "search_jobs"
+    - "get_job_details"
+    - "match_resume"
+    - "check_company"
+    - "track_application"
+    - "monitor_new_jobs"
+    - "send_alert"
+    # v3: Multi-agent tools
+    - "spawn_agent"
+    - "send_agent_message"
+    - "broadcast_message"
+    - "write_shared_memory"
+    - "read_shared_memory"
+    - "list_agents"
+    - "check_delegation_status"
+    - "get_agent_hierarchy"
+
+# ─────────────────────────────────────────────────
+# Agent Engine
+# ─────────────────────────────────────────────────
+engine:
+  max_steps: 15                 # max ReAct loop iterations per run
+  retry_policy:
+    max_retries: 3
+    backoff_seconds: 2
+  planning_prompt: |
+    You are an autonomous AI agent. Given a goal, reason step by step,
+    select the appropriate tool, execute it, observe the result, and repeat
+    until the goal is achieved or you determine it cannot be completed.
+
+    Always respond in this JSON format:
+    {
+      "thought": "your reasoning about what to do next",
+      "action": "tool_name",
+      "action_input": { "param": "value" }
+    }
+
+    When the goal is complete, respond with:
+    {
+      "thought": "I have completed the task",
+      "action": "finish",
+      "action_input": { "result": "final summary" }
+    }
+
+# ─────────────────────────────────────────────────
+# API Server
+# ─────────────────────────────────────────────────
+server:
+  host: "0.0.0.0"
+  port: 8000
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8000"
+  auth:
+    enabled: false
+    api_key: "${AGENTFORGE_API_KEY}"
+
+# ─────────────────────────────────────────────────
+# Logging
+# ─────────────────────────────────────────────────
+logging:
+  level: "INFO"                 # DEBUG | INFO | WARNING | ERROR
+  file: "./logs/agentforge.log"
+  stream_to_ui: true            # also push logs via WebSocket
+
+# ─────────────────────────────────────────────────
+# Rate Limiting
+# ─────────────────────────────────────────────────
+rate_limit:
+  requests_per_minute: 60
+  tokens_per_minute: 100000
+
+# ─────────────────────────────────────────────────
+# v3: Multi-Agent Configuration
+# ─────────────────────────────────────────────────
+multi_agent:
+  enabled: true
+  max_sub_agents_per_parent: 5  # max sub-agents a single agent can spawn
+  max_total_agents: 20          # global limit on concurrent agents
+  shared_memory:
+    db_path: "./data/shared_memory.db"
+  message_router:
+    db_path: "./data/messages.db"
+  delegation:
+    timeout_seconds: 300        # max time for a delegated task
+    auto_terminate: true        # auto-terminate idle sub-agents

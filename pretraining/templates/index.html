@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DI Jarvis</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- Highlight.js and Marked.js -->
+    <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- DOMPurify for safety -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.8/purify.min.js"></script>
+</head>
+
+<body>
+    <div class="chat-container">
+        <header class="chat-header">
+            <div class="header-content">
+                <h2>DI's Jarvis</h2>
+                <span class="status-indicator online"></span>
+            </div>
+            <button id="config-btn" class="model-info-btn">
+                Model Info
+            </button>
+        </header>
+
+        <div id="config-panel" class="config-panel">
+            <div class="panel-header">
+                <h2>Model Configuration</h2>
+                <button id="close-panel-btn" class="icon-btn">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                        <path d="M6 6L18 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                    </svg>
+                </button>
+            </div>
+            <div id="config-content" class="panel-content">
+                <p>Loading configuration...</p>
+            </div>
+        </div>
+        <div id="overlay" class="overlay"></div>
+
+        <div id="chat-history" class="chat-history">
+            <!-- Messages will be inserted here -->
+            <div class="message system">
+                <div class="message-content">
+                    <p>Hello! I am your AI assistant. How can I help you today?</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="input-area">
+            <div class="input-container">
+                <textarea id="user-input" placeholder="Type a message..." rows="1"></textarea>
+                <button id="send-btn" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                        <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const chatHistory = document.getElementById('chat-history');
+        const userInput = document.getElementById('user-input');
+        const sendBtn = document.getElementById('send-btn');
+        const configBtn = document.getElementById('config-btn');
+        const closePanelBtn = document.getElementById('close-panel-btn');
+        const configPanel = document.getElementById('config-panel');
+        const overlay = document.getElementById('overlay');
+        const configContent = document.getElementById('config-content');
+
+        // Initialize Marked
+        marked.use({
+            breaks: true, // Convert \n to <br>
+            gfm: true
+        });
+
+        // Conversation history
+        let conversation = [
+            { "role": "system", "content": "You are a helpful assistant developed by Zoho CRM DI Text" }
+        ];
+
+        // Config Toggle
+        function togglePanel() {
+            const isOpen = configPanel.classList.contains('open');
+            if (isOpen) {
+                configPanel.classList.remove('open');
+                overlay.classList.remove('visible');
+            } else {
+                configPanel.classList.add('open');
+                overlay.classList.add('visible');
+                fetchConfig();
+            }
+        }
+
+        configBtn.addEventListener('click', togglePanel);
+        closePanelBtn.addEventListener('click', togglePanel);
+        overlay.addEventListener('click', togglePanel);
+
+        async function fetchConfig() {
+            try {
+                const res = await fetch('/config');
+                const data = await res.json();
+
+                if (data.error) {
+                    configContent.innerHTML = `<p class="error">${data.error}</p>`;
+                    return;
+                }
+
+                let html = '<table class="config-table">';
+                for (const [key, value] of Object.entries(data)) {
+                    html += `<tr><td>${key}</td><td>${value}</td></tr>`;
+                }
+                html += '</table>';
+                configContent.innerHTML = html;
+            } catch (e) {
+                configContent.innerHTML = `<p class="error">Failed to load config: ${e.message}</p>`;
+            }
+        }
+
+        function autoResize(textarea) {
+            textarea.style.height = 'auto';
+            textarea.style.height = textarea.scrollHeight + 'px';
+            if (textarea.value === '') {
+                textarea.style.height = 'auto';
+            }
+        }
+
+        userInput.addEventListener('input', function () {
+            autoResize(this);
+            sendBtn.disabled = this.value.trim() === '';
+        });
+
+        userInput.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (!sendBtn.disabled) {
+                    sendMessage();
+                }
+            }
+        });
+
+        sendBtn.addEventListener('click', sendMessage);
+
+        function appendMessage(role, content) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}`;
+
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content markdown-body';
+
+            // For user messages, we just set tokens/text directly usually, 
+            // but to be consistent we can render user markdown too if desired.
+            if (role === 'user') {
+                contentDiv.textContent = content; // Keep user straight text usually
+            } else {
+                contentDiv.innerHTML = DOMPurify.sanitize(marked.parse(content));
+            }
+
+            messageDiv.appendChild(contentDiv);
+            chatHistory.appendChild(messageDiv);
+
+            // Highlight code blocks
+            messageDiv.querySelectorAll('pre code').forEach((block) => {
+                hljs.highlightElement(block);
+                addCopyButton(block);
+            });
+
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+            return contentDiv;
+        }
+
+        function addCopyButton(codeBlock) {
+            const pre = codeBlock.parentElement;
+            if (pre.querySelector('.copy-btn')) return; // already added
+
+            const btn = document.createElement('button');
+            btn.className = 'copy-btn';
+            btn.innerHTML = `
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="icon-sm">
+                    <path fill-rule="evenodd" clip-rule="evenodd" d="M12 4C10.8954 4 10 4.89543 10 6H14C14 4.89543 13.1046 4 12 4ZM8.53513 4C9.22675 2.8044 10.5194 2 12 2C13.4806 2 14.7733 2.8044 15.4649 4H17C18.6569 4 20 5.34315 20 7V19C20 20.6569 18.6569 22 17 22H7C5.34315 22 4 20.6569 4 19V7C4 5.34315 5.34315 4 7 4H8.53513ZM8 6H7C6.44772 6 6 6.44772 6 7V19C6 19.5523 6.44772 20 7 20H17C17.5523 20 18 19.5523 18 19V7C18 6.44772 17.5523 6 17 6H16C16 7.10457 15.1046 8 14 8H10C8.89543 8 8 7.10457 8 6Z" fill="currentColor"></path>
+                </svg>Copy code
+            `;
+
+            // Header for code block (like chatgpt)
+            const header = document.createElement('div');
+            header.className = 'code-header-gpt';
+
+            // Try to detect language from class
+            const langClass = Array.from(codeBlock.classList).find(c => c.startsWith('language-'));
+            const lang = langClass ? langClass.replace('language-', '') : 'text';
+
+            header.innerHTML = `<span>${lang}</span>`;
+            header.appendChild(btn);
+
+            // Wrap pre in a container
+            const container = document.createElement('div');
+            container.className = 'code-block-gpt';
+
+            pre.parentNode.insertBefore(container, pre);
+            container.appendChild(header);
+            container.appendChild(pre);
+
+            btn.addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard.writeText(codeBlock.innerText);
+                    btn.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-sm"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied!`;
+                    setTimeout(() => {
+                        btn.innerHTML = `
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="icon-sm">
+                                <path fill-rule="evenodd" clip-rule="evenodd" d="M12 4C10.8954 4 10 4.89543 10 6H14C14 4.89543 13.1046 4 12 4ZM8.53513 4C9.22675 2.8044 10.5194 2 12 2C13.4806 2 14.7733 2.8044 15.4649 4H17C18.6569 4 20 5.34315 20 7V19C20 20.6569 18.6569 22 17 22H7C5.34315 22 4 20.6569 4 19V7C4 5.34315 5.34315 4 7 4H8.53513ZM8 6H7C6.44772 6 6 6.44772 6 7V19C6 19.5523 6.44772 20 7 20H17C17.5523 20 18 19.5523 18 19V7C18 6.44772 17.5523 6 17 6H16C16 7.10457 15.1046 8 14 8H10C8.89543 8 8 7.10457 8 6Z" fill="currentColor"></path>
+                            </svg>Copy code
+                        `;
+                    }, 2000);
+                } catch (err) {
+                    console.error('Failed to copy!', err);
+                }
+            });
+        }
+
+        async function sendMessage() {
+            const text = userInput.value.trim();
+            if (!text) return;
+
+            // 1. Add User Message to UI
+            appendMessage('user', text);
+            conversation.push({ "role": "user", "content": text });
+
+            userInput.value = '';
+            autoResize(userInput);
+            sendBtn.disabled = true;
+
+            // 2. Add Assistant Message Placeholder
+            const assistantContentDiv = appendMessage('assistant', '');
+
+            // Add initial cursor
+            assistantContentDiv.innerHTML = '<span class="cursor"></span>';
+
+            let fullResponse = "";
+
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ messages: conversation })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+
+                // 3. Handle Streaming Response
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    fullResponse += chunk;
+
+                    // Render Markdown continuously
+                    assistantContentDiv.innerHTML = DOMPurify.sanitize(marked.parse(fullResponse));
+
+                    // Re-apply syntax highlighting to new code blocks
+                    assistantContentDiv.parentElement.querySelectorAll('pre code').forEach((block) => {
+                        hljs.highlightElement(block);
+                        addCopyButton(block);
+                    });
+
+                    chatHistory.scrollTop = chatHistory.scrollHeight;
+                }
+
+                // Add Assistant response to history
+                conversation.push({ "role": "assistant", "content": fullResponse });
+
+            } catch (error) {
+                console.error('Error:', error);
+                assistantContentDiv.innerHTML += "\n<p class='error'>[Error generation response]</p>";
+            } finally {
+                sendBtn.disabled = false;
+                // Focus back on input
+                userInput.focus();
+            }
+        }
+    </script>
+</body>
+
+</html>

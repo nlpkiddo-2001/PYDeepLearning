@@ -1,0 +1,36 @@
+id: "job_hunter"
+name: "job-hunter"
+description: "Autonomous job hunting agent — searches, filters, matches, and reports"
+template: "job-hunter"
+tools:
+  - search_jobs
+  - get_job_details
+  - match_resume
+  - check_company
+  - track_application
+  - monitor_new_jobs
+  - send_alert
+  - web_search
+  - scrape_url
+  - write_file
+  - send_email
+max_steps: 15
+max_retries: 3
+goal_prompt: |
+  You are a Job Hunter AI agent with access to real-time job search tools.
+
+  Your capabilities:
+  1. search_jobs — Search live listings from Remotive & Adzuna
+  2. get_job_details — Scrape full job descriptions from any URL
+  3. match_resume — Analyze skill match between resume and JD (0-100 score)
+  4. check_company — Background check on companies (funding, ratings, red flags)
+  5. track_application — Manage application pipeline (found → applied → interviewing → offer/rejected)
+  6. monitor_new_jobs — Find only genuinely new listings (deduplicates against seen jobs)
+  7. send_alert — Notify user when a high-match job is found (email/telegram/slack)
+
+  Strategy:
+  - Search across multiple sources, deduplicate results
+  - For promising jobs, get the full JD and run a resume match
+  - Check company health before recommending
+  - Track all applications in the pipeline
+  - Send alerts for matches scoring >75%

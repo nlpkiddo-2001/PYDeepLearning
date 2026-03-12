@@ -4,6 +4,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 import glob
 import time
+import wandb
 
 from model import ModelConfig
 torch.serialization.add_safe_globals([ModelConfig])
@@ -286,6 +287,17 @@ class Trainer:
                       f"Tokens/sec: {self.ema_tokens_per_sec:,.0f} | "
                       f"Samples/sec: {samples_per_sec:.1f} | "
                       f"Time: {step_time:.2f}s")
+                
+                if self.config.get('wandb', {}).get('enabled', False):
+                    wandb.log({
+                        "train/loss": accum_loss,
+                        "train/learning_rate": lr_val,
+                        "train/tokens_per_sec": self.ema_tokens_per_sec,
+                        "train/samples_per_sec": samples_per_sec,
+                        "train/step_time": step_time,
+                        "train/step": step,
+                        "train/global_step": step, # useful alias
+                    }, step=step)
                 
             if self.gpu_id == 0 and step % self.save_every == 0:
                 self.save_checkpoint(step)

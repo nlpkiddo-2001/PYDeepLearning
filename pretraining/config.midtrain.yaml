@@ -4,6 +4,12 @@
 
 stage: "midtrain"
 
+wandb:
+  enabled: true
+  entity: "vipinsaravana"
+  project: "H200 Pretrain"
+  name: null
+
 output_dir: "./checkpoints/midtrain"
 
 # Resume from the latest pretrain checkpoint.

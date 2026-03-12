@@ -3,6 +3,12 @@
 
 stage: "pretrain"
 
+wandb:
+  enabled: true
+  entity: "vipinsaravana"
+  project: "H200 Pretrain"
+  name: null
+
 data_dir: "./data/pretraining"
 output_dir: "./checkpoints/pretrain"
 

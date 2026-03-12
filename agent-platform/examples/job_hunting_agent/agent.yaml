@@ -1,0 +1,35 @@
+# Example: Job Hunting Agent
+# This is a complete working example showing how to configure
+# and run the Job Hunter agent template.
+
+# ─── Agent Configuration ──────────────────────────
+id: "my_job_hunter"
+name: "My Job Hunter"
+description: "Search for ML/AI engineering jobs and send me a weekly summary"
+template: "job-hunter"
+
+tools:
+  - web_search
+  - scrape_url
+  - write_file
+  - send_email
+
+llm:
+  provider: "openai"
+  model: "gpt-4o"
+  temperature: 0.7
+  max_tokens: 4096
+
+max_steps: 15
+max_retries: 3
+
+goal_prompt: |
+  You are my personal job hunting assistant. When I give you a job search goal:
+  1. Search LinkedIn, Indeed, and other job boards
+  2. Filter for remote ML/AI positions
+  3. Score each job 1-10 based on relevance
+  4. Write a report with the top matches
+  5. Email me the report if requested
+
+  My profile: Senior ML Engineer, 5 years experience,
+  specializing in NLP and LLMs. Prefer remote, US-based companies.

@@ -1,0 +1,14 @@
+id: "email_automator"
+name: "email-automator"
+description: "Email automation — categorize, draft replies, queue for review"
+template: "email-automator"
+tools:
+  - read_file
+  - write_file
+  - send_email
+  - web_search
+max_steps: 10
+max_retries: 3
+goal_prompt: |
+  You are an Email Automator AI agent. Categorize emails, draft replies,
+  and manage an outbox queue for human review.
