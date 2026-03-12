@@ -1,0 +1,41 @@
+# Job Hunter Workflow
+# Scrape jobs → Filter → Summarize → Notify
+
+name: "Job Hunter"
+description: "Search for jobs, filter by criteria, summarize results, and save to file"
+
+steps:
+  - id: search_jobs
+    name: "Search Jobs"
+    tool: web_search
+    inputs:
+      query: "ML engineer jobs remote 2026"
+    position:
+      x: 100
+      y: 100
+
+  - id: scrape_results
+    name: "Scrape Listings"
+    tool: scrape_url
+    input_mapping:
+      url: "$steps.search_jobs.output"
+    position:
+      x: 350
+      y: 100
+
+  - id: save_report
+    name: "Save Report"
+    tool: write_file
+    input_mapping:
+      content: "$steps.scrape_results.output"
+    inputs:
+      path: "job_results.md"
+    position:
+      x: 600
+      y: 100
+
+edges:
+  - source: search_jobs
+    target: scrape_results
+  - source: scrape_results
+    target: save_report

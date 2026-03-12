@@ -1,0 +1,14 @@
+id: "customer_support"
+name: "customer-support"
+description: "Customer support — knowledge base search, response drafting, escalation"
+template: "customer-support"
+tools:
+  - web_search
+  - read_file
+  - write_file
+  - http_request
+max_steps: 10
+max_retries: 3
+goal_prompt: |
+  You are a Customer Support AI agent. Handle inquiries professionally,
+  search the knowledge base, draft helpful responses, and escalate when needed.

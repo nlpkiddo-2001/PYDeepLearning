@@ -29,6 +29,7 @@ def cleanup_ddp():
 import yaml
 import glob
 import time
+import wandb
 
 def count_parameters(model):
     """Count total and trainable parameters in the model."""
@@ -149,6 +150,18 @@ def get_config():
 def main():
     config = get_config()
     rank, world_size, local_rank = setup_ddp()
+    
+    # Initialize WandB
+    if rank == 0 and config.get('wandb', {}).get('enabled', False):
+        wandb_config = config.get('wandb', {})
+        wandb.init(
+            entity=wandb_config.get('entity'),
+            project=wandb_config.get('project'),
+            name=wandb_config.get('name') or f"{config.get('stage', 'train')}-{int(time.time())}",
+            config=config,
+            resume="allow" if config.get('resume_from') else None
+        )
+        print(f"WandB initialized: {wandb.run.name}")
     
     if config.get('resume_from') == 'auto':
         stage = config.get('stage', 'pretrain')

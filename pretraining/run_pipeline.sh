@@ -97,25 +97,6 @@ torchrun --nproc_per_node=$NUM_GPUS src/main.py --config config.finetune.yaml
 
 echo "Fine-tuning complete!"
 echo ""
-
-
-# --- HF EXPORT ---
-echo "=================================================================="
-echo "STEP 4: EXPORT TO HUGGING FACE (Optional)"
-echo "=================================================================="
-FINETUNE_CKPT=$(ls -t ./checkpoints/finetune/step_*.pt 2>/dev/null | head -1 || echo "")
-
-if [ -n "$FINETUNE_CKPT" ] && [ -f "scripts/convert_to_hf.py" ]; then
-    echo "Exporting model from $FINETUNE_CKPT..."
-    python scripts/convert_to_hf.py \
-        --checkpoint "$FINETUNE_CKPT" \
-        --output_dir "./checkpoints/hf_model"
-    echo "Model exported to ./checkpoints/hf_model"
-else
-    echo "Skipping export (Checkpoint or script missing)."
-fi
-
-echo ""
 echo "=================================================================="
 echo "PIPELINE SUMMARY"
 echo "=================================================================="

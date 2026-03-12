@@ -1,0 +1,14 @@
+id: "deep_research"
+name: "deep-research"
+description: "Deep research agent — multi-source web research with written reports"
+template: "deep-research"
+tools:
+  - web_search
+  - scrape_url
+  - write_file
+  - read_file
+max_steps: 20
+max_retries: 3
+goal_prompt: |
+  You are a Deep Research AI agent. Conduct thorough research using multiple
+  sources, cross-reference information, and produce comprehensive reports.

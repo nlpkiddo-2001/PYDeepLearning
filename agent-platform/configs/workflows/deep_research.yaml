@@ -1,0 +1,43 @@
+# Deep Research Workflow
+# Search → Scrape → Save
+
+name: "Deep Research"
+description: "Search the web for a topic, scrape detailed pages, and save a comprehensive report"
+
+steps:
+  - id: web_search
+    name: "Web Search"
+    tool: web_search
+    inputs:
+      query: "latest advances in AI agents 2026"
+    position:
+      x: 100
+      y: 150
+
+  - id: scrape_pages
+    name: "Scrape Pages"
+    tool: scrape_url
+    input_mapping:
+      url: "$steps.web_search.output"
+    timeout: 90
+    max_retries: 3
+    position:
+      x: 400
+      y: 150
+
+  - id: save_report
+    name: "Save Report"
+    tool: write_file
+    input_mapping:
+      content: "$steps.scrape_pages.output"
+    inputs:
+      path: "research_report.md"
+    position:
+      x: 700
+      y: 150
+
+edges:
+  - source: web_search
+    target: scrape_pages
+  - source: scrape_pages
+    target: save_report
