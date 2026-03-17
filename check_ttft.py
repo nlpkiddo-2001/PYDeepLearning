@@ -115,7 +115,6 @@ payload = {
 }
 
 headers = {
-    'Authorization': 'SystemAuth ZohoCRM-1768288542665-09fc2057f8fc434847d69ae3faf226d389bb89ac9ac19653a1c46f48c9ea6aba61bd8149f4eedb8989cf4b4c98ec7943cfd41960ee6c00053c7016904510dfdf',
     'Content-Type': 'application/json',
     'Cookie': 'zalb_791c15dd5f=f0b83a68b20b8687864dc215f54d0554'
 }
