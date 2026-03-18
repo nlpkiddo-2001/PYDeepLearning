@@ -4,11 +4,10 @@ vLLM Provider
 Connect to vLLM-hosted models with JWT authentication.
 Supports custom parameters like chat_template_kwargs.
 
-Example config in agent.yaml:
     llm:
       provider: "vllm"
       model: "glm-5"
-      base_url: "http://103.42.51.234:443/llm/text/api/glm/v1"
+      base_url: ""
       jwt_secret: "eyJhbGciOiJI"
       jwt_algorithm: "HS256"
       jwt_expiry_minutes: 15
