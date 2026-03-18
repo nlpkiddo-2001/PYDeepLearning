@@ -2,7 +2,7 @@
 
 **A lightweight, self-hostable agentic AI platform.** Build autonomous agents with any LLM provider, wire them to tools, and test them through a built-in UI — no expensive SaaS required.
 
-![Demo](./output.gif)
+![Demo](./output_hq.gif)
 
 ---
 
