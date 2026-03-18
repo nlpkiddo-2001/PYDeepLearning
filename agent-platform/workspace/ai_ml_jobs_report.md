@@ -1,149 +1,92 @@
-# AI/ML Engineering Jobs at Google & Similar Companies
-## Target Experience: 3-4 Years
+# AI/ML Engineering Jobs at Top Tech Companies
+## Search Criteria: 3-4 Years Experience, Posted Within 2 Weeks
 
 ---
 
-## 🟢 GOOGLE
+## 🟢 NETFLIX
 
-### 1. Data Scientist, Research Cloud
-**Location:** Bengaluru, Karnataka, India  
-**Experience Required:** 3 years of ML experience ✅ **PERFECT MATCH**  
-**URL:** https://in.linkedin.com/jobs/view/data-scientist-research-cloud-at-google-4372854572  
-**Posted:** March 10, 2026
+### 1. Machine Learning Engineer (L4/L5) - Emerging Game Technologies
+- **Location:** Los Gatos, CA
+- **Posted:** March 5, 2026 ✅ Recent
+- **Salary:** $466,000 - $750,000/year
+- **Experience Level:** L4/L5 (typically 3-5 years)
+- **Focus:** MLOps, deployment, performance optimization for gaming AI
+- **URL:** https://www.linkedin.com/jobs/view/machine-learning-engineer-l4-l5-emerging-game-technologies-at-netflix-4379896695
 
-**Key Requirements:**
-- Master's degree in Statistics, Mathematics, Physics, Economics, Engineering, or related quantitative field
-- 3 years of experience with Machine Learning and Statistical modeling (anomaly detection, classification)
-- Experience in Python, R, SQL
-
-**Responsibilities:**
-- Build AI/ML/statistical models for Google Cloud Supply Chain and Operations
-- Develop forecasting, anomaly detection, GenAI, and automation solutions
-- Drive data-informed decision making for data centers
-
----
-
-### 2. Data Scientist, Product, Google Play Games
-**Location:** Bengaluru, Karnataka, India  
-**URL:** https://in.linkedin.com/jobs/view/data-scientist-product-google-play-games-at-google-4375394799  
-**Posted:** March 16, 2026
-
----
-
-### 3. Software Engineer II, Google Ads
-**Location:** Bengaluru, Karnataka, India  
-**URL:** https://in.linkedin.com/jobs/view/software-engineer-ii-google-ads-at-google-4385957837  
-**Posted:** March 17, 2026
-
----
-
-### 4. Software Engineer III, Google Cloud
-**Location:** Bengaluru & Hyderabad, India  
-**URL:** https://in.linkedin.com/jobs/view/software-engineer-iii-google-cloud-at-google-4380436628  
-**Posted:** March 5, 2026
+### 2. Machine Learning Engineer (L5) - Content Understanding
+- **Location:** United States (Remote-friendly)
+- **Posted:** March 12, 2026 ✅ Very Recent
+- **Salary:** $419,400 - $675,000/year
+- **Experience Required:** 4+ years explicitly stated
+- **Focus:** Content metadata, merchandising, ML/AI solutions for content discovery
+- **URL:** https://www.linkedin.com/jobs/view/machine-learning-engineer-l5-content-understanding-at-netflix-4241285593
 
 ---
 
 ## 🍎 APPLE
 
-### Machine Learning Software Engineer
-**Location:** Bengaluru, Karnataka, India  
-**Experience Required:** 3+ years ✅ **PERFECT MATCH**  
-**URL:** https://in.linkedin.com/jobs/view/machine-learning-software-engineer-at-apple-4359245299  
-**Posted:** January 16, 2026  
-**Level:** Mid-Senior level
-
-**Key Requirements:**
-- 3+ years industry experience building ML solutions
-- Strong experience in anomaly detection, data validation
-- Proficiency in Python (Pandas, NumPy, Scikit-learn, PyTorch/TensorFlow)
-- Hands-on experience with SQL and databases
-- Knowledge of statistical methods (PCA, exponential smoothing)
-
-**Responsibilities:**
-- Design and build scalable ML-driven solutions for data validation
-- Build anomaly detection systems and work on GenAI projects
-- Apply full ML lifecycle from EDA to deployment and monitoring
-- Collaborate with data engineering teams
-
-**Preferred:**
-- Experience with MLOps tools (MLflow, Kubeflow)
-- Big data frameworks (Spark, Kafka)
-- CI/CD for data pipelines
+### 3. Machine Learning Engineer - Video Processing
+- **Location:** Cupertino, CA
+- **Posted:** January 16, 2026
+- **Salary:** $147,400 - $272,100/year
+- **Experience Required:** BS + minimum 3 years (explicitly stated) ✅ Perfect match
+- **Focus:** ML-based video processing algorithms for Apple products
+- **Skills:** Python, Java, C/C++, image/video processing, computer vision
+- **URL:** https://www.linkedin.com/jobs/view/machine-learning-engineer-at-apple-4360101211
 
 ---
 
-## 💼 MICROSOFT
+## 🔵 MICROSOFT
 
-### Senior Applied AI Engineer
-**Location:** Bengaluru, Karnataka, India  
-**Experience Required:** Bachelor's + 1+ years ML experience (Senior role prefers 5+ years) ⚠️ **MAY BE STRETCH**  
-**URL:** https://in.linkedin.com/jobs/view/senior-applied-ai-engineer-at-microsoft-4384189032  
-**Posted:** March 18, 2026
+### 4. ML Engineer - Generative AI
+- **Location:** Redmond, WA
+- **Posted:** March 18, 2026 ✅ Very Recent
+- **Salary:** $100,600 - $215,400/year (higher in SF Bay Area/NYC: $131,400 - $215,400)
+- **Experience Required:** 2+ years required, 3+ years preferred ✅ Good match
+- **Focus:** Generative AI, multimodal systems, RAG, production ML systems
+- **URL:** https://www.linkedin.com/jobs/view/ml-engineer-at-microsoft-4384167845
 
-**Key Requirements:**
-- Bachelor's/Master's/PhD in CS, Statistics, Engineering, or related field
-- 1+ years experience with ML libraries for real-world AI/ML problems
-- Strong software engineering skills (C#, Python)
-
-**Responsibilities:**
-- Build AI-driven solutions using foundation models, RAG, multi-agent architectures
-- Fine-tune foundation models and evaluate model behavior
-- Develop LLM prompts, agents, and query execution workflows
-- Work on Generative AI, NLP, multi-modal models
-
-**Preferred:**
-- Experience with MLOps, CI/CD, LangChain, PromptFlow
-- Publications in peer-reviewed venues
+### 5. Software Engineer II - Gen AI & Agents
+- **Location:** Redmond, WA
+- **Posted:** March 18, 2026 ✅ Very Recent
+- **Salary:** $100,600 - $215,400/year (higher in SF Bay Area/NYC: $131,400 - $215,400)
+- **Experience Required:** 2+ years + distributed services experience
+- **Focus:** AI Agent systems, enterprise AI, Microsoft Security
+- **URL:** https://www.linkedin.com/jobs/view/software-engineer-ii-gen-ai-agents-at-microsoft-4369727848
 
 ---
 
-## 🛒 eBAY
+## 🛒 ETSY
 
-### Machine Learning Engineer
-**Location:** Bengaluru, Karnataka, India  
-**Experience Required:** MS + 1+ years OR BS/BA + 3+ years ✅ **PERFECT MATCH**  
-**URL:** https://in.linkedin.com/jobs/view/machine-learning-engineer-at-ebay-4363979871  
-**Posted:** March 2, 2026  
-**Level:** T24 (Entry level)
-
-**Key Requirements:**
-- MS in CS with 1+ years OR BS/BA with 3+ years in ML/AI
-- Experience building large-scale distributed applications (Scala, Java)
-- Experience with NoSQL databases (MongoDB, Redis)
-
-**Responsibilities:**
-- Build state-of-the-art recommender systems
-- Work on deep learning retrieval, ranking models, GenAI/LLM recommendations
-- Deploy AI models with GCP Vertex AI integration
-- Process billions of items and millions of users data
-
-**Preferred:**
-- GCP experience
-- Big data pipelines (Hadoop, Spark, Flink)
-- LLMs and prompt engineering
+### 6. Machine Learning Engineer, Search
+- **Location:** Brooklyn, NY (Hybrid - 1-2 days/week in office)
+- **Posted:** March 7, 2026 ✅ Recent
+- **Salary:** $153,000 - $199,000/year
+- **Focus:** LLMs, search ML models, two-sided marketplace
+- **Skills:** TensorFlow/TFX, PyTorch, LLM fine-tuning (Qwen, Llama)
+- **URL:** https://www.linkedin.com/jobs/view/machine-learning-engineer-search-at-etsy-4372940488
 
 ---
 
-## 📊 SUMMARY TABLE
+## 📊 SUMMARY
 
-| Company | Role | Experience Required | Match | Location |
-|---------|------|---------------------|-------|----------|
-| **Google** | Data Scientist, Research Cloud | 3 years | ✅ Perfect | Bengaluru |
-| **Apple** | ML Software Engineer | 3+ years | ✅ Perfect | Bengaluru |
-| **eBay** | ML Engineer | 3+ years (BS) | ✅ Perfect | Bengaluru |
-| Microsoft | Senior Applied AI Engineer | 5+ years (Senior) | ⚠️ Stretch | Bengaluru |
-| Google | Data Scientist, Product | Not specified | ✅ Good fit | Bengaluru |
-| Google | Software Engineer II/III | Not specified | ✅ Good fit | Bengaluru/Hyderabad |
-
----
-
-## 🎯 TOP RECOMMENDATIONS (3-4 Years Experience)
-
-1. **Google - Data Scientist, Research Cloud** - Best match with exactly 3 years ML experience requirement
-2. **Apple - Machine Learning Software Engineer** - Perfect 3+ years requirement, great team
-3. **eBay - Machine Learning Engineer** - BS + 3 years qualifies, cutting-edge recommender systems work
+| Company | Role | Location | Salary Range | Posted | Experience Match |
+|---------|------|----------|--------------|-------|-----------------|
+| Netflix | ML Engineer (L4/L5) | Los Gatos, CA | $466K-$750K | Mar 5 | ✅ L4/L5 = 3-5 yrs |
+| Netflix | ML Engineer (L5) | US (Remote) | $419K-$675K | Mar 12 | ✅ 4+ years req |
+| Apple | ML Engineer | Cupertino, CA | $147K-$272K | Jan 16 | ✅ Min 3 years req |
+| Microsoft | ML Engineer | Redmond, WA | $101K-$215K | Mar 18 | ✅ 2-3+ years |
+| Microsoft | SE II - Gen AI | Redmond, WA | $101K-$215K | Mar 18 | ✅ 2+ years |
+| Etsy | ML Engineer, Search | Brooklyn, NY | $153K-$199K | Mar 7 | ✅ Mid-level |
 
 ---
 
-*Report generated on search date. Job URLs are active LinkedIn postings.*
+## 🎯 TOP RECOMMENDATIONS (Best Match for 3-4 Years Experience)
+
+1. **Netflix ML Engineer (L5) - Content Understanding** - Explicitly requires 4+ years, highest pay, recent posting
+2. **Apple ML Engineer** - Explicitly requires minimum 3 years, iconic company
+3. **Microsoft ML Engineer** - Prefers 3+ years, cutting-edge GenAI work, very recent
+
+---
+
+*Report generated on search date. Job availability may change.*
