@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { StreamEvent } from '../hooks/useAgentStream';
+import MarkdownRenderer from './MarkdownRenderer';
+import ThinkingBlock from './ThinkingBlock';
 
 interface ThinkingRunLogProps {
   events: StreamEvent[];
@@ -154,7 +156,9 @@ function StepCard({ group, isLatest }: { group: StepGroup; isLatest: boolean }) 
           {group.thought && (
             <div className="thinking-section">
               <div className="thinking-section-label">Reasoning</div>
-              <div className="thinking-section-content thought">{group.thought}</div>
+              <div className="thinking-section-content thought">
+                <MarkdownRenderer content={group.thought} />
+              </div>
             </div>
           )}
 
@@ -185,7 +189,7 @@ function StepCard({ group, isLatest }: { group: StepGroup; isLatest: boolean }) 
             <div className="thinking-section">
               <div className="thinking-section-label">Result</div>
               <div className={`thinking-section-content result ${group.toolResult.startsWith('ERROR') ? 'error-text' : ''}`}>
-                {group.toolResult.length > 500 ? group.toolResult.slice(0, 500) + '…' : group.toolResult}
+                <MarkdownRenderer content={group.toolResult} maxLength={500} />
               </div>
             </div>
           )}
@@ -275,12 +279,7 @@ export default function ThinkingRunLog({ events, goal }: ThinkingRunLogProps) {
         <div className="thinking-final-result">
           <div className="thinking-result-avatar">🤖</div>
           <div className="thinking-result-bubble">
-            {doneGroup.finalResult.split('\n').map((line, j) => (
-              <React.Fragment key={j}>
-                {line}
-                {j < doneGroup.finalResult!.split('\n').length - 1 && <br />}
-              </React.Fragment>
-            ))}
+            <ThinkingBlock content={doneGroup.finalResult} />
           </div>
         </div>
       )}

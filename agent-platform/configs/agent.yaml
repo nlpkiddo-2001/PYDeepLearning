@@ -25,9 +25,9 @@ providers:
   vllm:
     provider: "vllm"
     model: "glm-5"
-    base_url: ""
-    jwt_secret: ""
-    jwt_algorithm: ""
+    base_url: "http://103.42.51.234:443/llm/text/api/glm/v1"
+    jwt_secret: "eyJhbGciOiJI"
+    jwt_algorithm: "HS256"
     jwt_expiry_minutes: 10
     temperature: 0.3
     max_tokens: 128000
@@ -84,7 +84,7 @@ tools:
 # Agent Engine
 # ─────────────────────────────────────────────────
 engine:
-  max_steps: 15                 # max ReAct loop iterations per run
+  max_steps: 100                # max ReAct loop iterations per run
   retry_policy:
     max_retries: 3
     backoff_seconds: 2

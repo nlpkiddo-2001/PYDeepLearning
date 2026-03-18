@@ -88,7 +88,7 @@ class ReActPlanner:
         tool_registry: ToolRegistry,
         memory: MemoryManager,
         event_bus_instance: Optional[EventBus] = None,
-        max_steps: int = 15,
+        max_steps: int = 100,
         max_retries: int = 3,
         planning_prompt: Optional[str] = None,
     ):
@@ -303,30 +303,92 @@ class ReActPlanner:
         return f"ERROR: Tool '{tool_name}' failed after {self.max_retries} attempts: {last_error}"
 
     def _parse_action(self, content: str) -> Dict[str, Any]:
-        """Parse the LLM output into thought/action/action_input."""
-        # Try direct JSON parse
-        try:
-            # Find JSON in the response (may be wrapped in markdown code blocks)
-            json_str = content
-            if "```json" in content:
-                json_str = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                json_str = content.split("```")[1].split("```")[0].strip()
+        """Parse the LLM output into thought/action/action_input.
 
-            parsed = json.loads(json_str)
-            return {
-                "thought": parsed.get("thought", ""),
-                "action": parsed.get("action", ""),
-                "action_input": parsed.get("action_input", {}),
-            }
+        Handles multiple response formats:
+        - Plain JSON
+        - JSON wrapped in ```json ... ``` or ``` ... ```
+        - <think>...</think> reasoning blocks followed by JSON (GLM, DeepSeek, etc.)
+        - JSON embedded in free-form text
+        """
+        import re
+
+        cleaned = content
+
+        # 1. Strip <think>...</think> blocks (models like GLM-5, DeepSeek-R1)
+        cleaned = re.sub(
+            r"<think>.*?</think>",
+            "",
+            cleaned,
+            flags=re.DOTALL,
+        ).strip()
+
+        # Also handle unclosed <think> blocks (model started thinking but
+        # the closing tag is the boundary before JSON).
+        if "<think>" in cleaned:
+            cleaned = re.sub(r"<think>.*", "", cleaned, flags=re.DOTALL).strip()
+
+        # 2. Extract from markdown code blocks
+        try:
+            if "```json" in cleaned:
+                json_str = cleaned.split("```json")[1].split("```")[0].strip()
+                parsed = json.loads(json_str)
+                return self._normalise_parsed(parsed)
+            elif "```" in cleaned:
+                json_str = cleaned.split("```")[1].split("```")[0].strip()
+                parsed = json.loads(json_str)
+                return self._normalise_parsed(parsed)
         except (json.JSONDecodeError, IndexError):
-            logger.warning("Failed to parse LLM output as JSON: %s", content[:200])
-            # Fallback: try to extract meaningful info
-            return {
-                "thought": content,
-                "action": "finish",
-                "action_input": {"result": content},
-            }
+            pass  # fall through to next strategy
+
+        # 3. Try parsing the cleaned text directly as JSON
+        try:
+            parsed = json.loads(cleaned)
+            return self._normalise_parsed(parsed)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # 4. Extract the first top-level JSON object from the text
+        #    (handles text before/after the JSON block)
+        match = re.search(r"\{[\s\S]*\}", cleaned)
+        if match:
+            candidate = match.group()
+            try:
+                parsed = json.loads(candidate)
+                return self._normalise_parsed(parsed)
+            except json.JSONDecodeError:
+                # Try to find balanced braces more carefully
+                depth, start = 0, None
+                for i, ch in enumerate(cleaned):
+                    if ch == "{":
+                        if depth == 0:
+                            start = i
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0 and start is not None:
+                            try:
+                                parsed = json.loads(cleaned[start : i + 1])
+                                return self._normalise_parsed(parsed)
+                            except json.JSONDecodeError:
+                                start = None
+
+        logger.warning("Failed to parse LLM output as JSON: %s", content[:300])
+        # Fallback: treat as a conversational reply
+        return {
+            "thought": content,
+            "action": "finish",
+            "action_input": {"result": content},
+        }
+
+    @staticmethod
+    def _normalise_parsed(parsed: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalise a parsed JSON dict into the expected schema."""
+        return {
+            "thought": parsed.get("thought", ""),
+            "action": parsed.get("action", ""),
+            "action_input": parsed.get("action_input", {}),
+        }
 
     def _format_tool_descriptions(self) -> str:
         """Format tool descriptions for the system prompt."""

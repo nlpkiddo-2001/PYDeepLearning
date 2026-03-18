@@ -79,23 +79,44 @@ def _get_db() -> sqlite3.Connection:
 @tool(
     name="search_jobs",
     description=(
-        "Search live job listings across Remotive (remote-only, free) and "
-        "Adzuna (free tier). Returns title, company, URL, location, salary, "
-        "and posted date. Use location='remote' for remote roles."
+        "Search live job listings across Remotive (remote-only, free), "
+        "Adzuna (free tier), and JSearch via RapidAPI. Returns structured "
+        "JSON array of jobs with title, company, URL, location, salary, "
+        "posted date, and source. Use location='remote' for remote roles."
     ),
     tags=["job", "search"],
 )
-async def search_jobs(query: str, location: str = "remote", days_ago: int = 7) -> str:
-    """Search live job listings across multiple free sources."""
+async def search_jobs(
+    query: str,
+    location: str = "remote",
+    days_ago: int = 7,
+    experience: str = "",
+    employment_type: str = "",
+) -> str:
+    """Search live job listings across multiple free sources.
+
+    Args:
+        query: Job search keywords (e.g. "python backend developer")
+        location: Location filter — use 'remote' for remote roles
+        days_ago: Only return jobs posted within this many days
+        experience: Experience filter for JSearch — one of:
+                    'under_3_years_experience', 'more_than_3_years_experience',
+                    'no_experience', 'no_degree'
+        employment_type: Employment type for JSearch — one of:
+                         'FULLTIME', 'PARTTIME', 'CONTRACTOR', 'INTERN'
+    """
     days_ago = int(days_ago)
     results: List[Dict[str, Any]] = []
 
-    # Run sources concurrently
+    # Run all three sources concurrently
     remotive_task = asyncio.create_task(_search_remotive(query))
     adzuna_task = asyncio.create_task(_search_adzuna(query, location, days_ago))
+    jsearch_task = asyncio.create_task(
+        _search_jsearch(query, location, days_ago, experience, employment_type)
+    )
 
-    remotive_results, adzuna_results = await asyncio.gather(
-        remotive_task, adzuna_task, return_exceptions=True
+    remotive_results, adzuna_results, jsearch_results = await asyncio.gather(
+        remotive_task, adzuna_task, jsearch_task, return_exceptions=True
     )
 
     if isinstance(remotive_results, list):
@@ -108,8 +129,13 @@ async def search_jobs(query: str, location: str = "remote", days_ago: int = 7) -
     else:
         logger.warning("Adzuna search failed: %s", adzuna_results)
 
+    if isinstance(jsearch_results, list):
+        results.extend(jsearch_results)
+    else:
+        logger.warning("JSearch search failed: %s", jsearch_results)
+
     if not results:
-        return f"No job listings found for '{query}' in '{location}'."
+        return json.dumps({"query": query, "location": location, "jobs": []})
 
     # De-duplicate by title+company
     seen = set()
@@ -120,19 +146,14 @@ async def search_jobs(query: str, location: str = "remote", days_ago: int = 7) -
             seen.add(key)
             unique.append(r)
 
-    # Format output
-    lines = [f"Found {len(unique)} jobs for '{query}' ({location}):\n"]
-    for i, job in enumerate(unique[:15], 1):
-        lines.append(f"{i}. **{job.get('title', 'N/A')}** — {job.get('company', 'N/A')}")
-        lines.append(f"   Location: {job.get('location', 'N/A')}")
-        if job.get("salary"):
-            lines.append(f"   Salary: {job['salary']}")
-        lines.append(f"   Posted: {job.get('date', 'N/A')}")
-        lines.append(f"   URL: {job.get('url', 'N/A')}")
-        lines.append(f"   Source: {job.get('source', 'N/A')}")
-        lines.append("")
-
-    return "\n".join(lines)
+    # Return structured JSON for downstream pipeline tools
+    output = {
+        "query": query,
+        "location": location,
+        "total": len(unique),
+        "jobs": unique[:20],
+    }
+    return json.dumps(output, indent=2)
 
 
 async def _search_remotive(query: str) -> List[Dict[str, Any]]:
@@ -209,6 +230,77 @@ async def _search_adzuna(query: str, location: str, days_ago: int) -> List[Dict[
             "salary": salary,
             "date": job.get("created", "")[:10],
             "source": "Adzuna",
+        })
+    return results
+
+
+async def _search_jsearch(
+    query: str,
+    location: str,
+    days_ago: int,
+    experience: str = "",
+    employment_type: str = "",
+) -> List[Dict[str, Any]]:
+    """Search JSearch API via RapidAPI — free tier (100 req/month)."""
+    rapid_key = os.getenv("RAPIDAPI_KEY", "")
+    if not rapid_key:
+        logger.debug("RAPIDAPI_KEY not set — skipping JSearch")
+        return []
+
+    params: Dict[str, Any] = {
+        "query": f"{query} in {location}" if location and location.lower() != "remote"
+                 else f"{query} remote",
+        "page": "1",
+        "num_pages": "1",
+        "date_posted": "week" if days_ago <= 7 else "month",
+    }
+    if experience:
+        params["job_requirements"] = experience
+    if employment_type:
+        params["employment_types"] = employment_type
+    if location.lower() == "remote":
+        params["remote_jobs_only"] = "true"
+
+    headers = {
+        "X-RapidAPI-Key": rapid_key,
+        "X-RapidAPI-Host": "jsearch.p.rapidapi.com",
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            "https://jsearch.p.rapidapi.com/search",
+            params=params,
+            headers=headers,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    results = []
+    for job in data.get("data", [])[:10]:
+        salary_min = job.get("job_min_salary")
+        salary_max = job.get("job_max_salary")
+        salary_period = job.get("job_salary_period", "")
+        salary = ""
+        if salary_min and salary_max:
+            salary = f"${int(salary_min):,} – ${int(salary_max):,}"
+            if salary_period:
+                salary += f" ({salary_period})"
+        elif salary_min:
+            salary = f"From ${int(salary_min):,}"
+
+        results.append({
+            "id": job.get("job_id", ""),
+            "title": job.get("job_title", ""),
+            "company": job.get("employer_name", ""),
+            "url": job.get("job_apply_link", "") or job.get("job_google_link", ""),
+            "location": job.get("job_city", "") or job.get("job_country", ""),
+            "salary": salary,
+            "date": (job.get("job_posted_at_datetime_utc", "") or "")[:10],
+            "source": "JSearch",
+            "description_snippet": (job.get("job_description", "") or "")[:300],
+            "employment_type": job.get("job_employment_type", ""),
+            "is_remote": job.get("job_is_remote", False),
+            "employer_logo": job.get("employer_logo", ""),
         })
     return results
 
@@ -779,3 +871,702 @@ async def send_alert(
             f"Set env vars to enable: ALERT_EMAIL_USER/PASSWORD, "
             f"TELEGRAM_BOT_TOKEN/CHAT_ID, or SLACK_WEBHOOK_URL"
         )
+
+
+# ═════════════════════════════════════════════════════════════════════
+# 8. classify_companies — Product-based vs Service-based Classifier
+# ═════════════════════════════════════════════════════════════════════
+
+# Built-in knowledge base of well-known companies by type.
+# This avoids API calls for common names and provides a fast fallback.
+_COMPANY_CLASSIFICATIONS: Dict[str, str] = {
+    # Product-based
+    "google": "product", "meta": "product", "facebook": "product",
+    "apple": "product", "amazon": "product", "microsoft": "product",
+    "netflix": "product", "spotify": "product", "uber": "product",
+    "lyft": "product", "airbnb": "product", "stripe": "product",
+    "shopify": "product", "slack": "product", "zoom": "product",
+    "dropbox": "product", "twilio": "product", "datadog": "product",
+    "snowflake": "product", "palantir": "product", "coinbase": "product",
+    "robinhood": "product", "swiggy": "product", "zomato": "product",
+    "cred": "product", "razorpay": "product", "phonepe": "product",
+    "paytm": "product", "flipkart": "product", "meesho": "product",
+    "groww": "product", "zerodha": "product", "ola": "product",
+    "myntra": "product", "dream11": "product", "nykaa": "product",
+    "freshworks": "product", "zoho": "product", "postman": "product",
+    "notion": "product", "figma": "product", "canva": "product",
+    "atlassian": "product", "jira": "product", "github": "product",
+    "gitlab": "product", "hashicorp": "product", "elastic": "product",
+    "mongodb": "product", "redis": "product", "confluent": "product",
+    "databricks": "product", "openai": "product", "anthropic": "product",
+    "hugging face": "product", "tesla": "product", "nvidia": "product",
+    "amd": "product", "intel": "product", "adobe": "product",
+    "salesforce": "product", "oracle": "product", "sap": "product",
+    "vmware": "product", "cloudflare": "product", "crowdstrike": "product",
+    "palo alto networks": "product", "servicenow": "product",
+    "twitter": "product", "x": "product", "linkedin": "product",
+    "pinterest": "product", "snap": "product", "snapchat": "product",
+    "disney": "product", "hotstar": "product",
+    # Service / Consulting / IT outsourcing
+    "tcs": "service", "tata consultancy services": "service",
+    "infosys": "service", "wipro": "service", "hcl": "service",
+    "hcltech": "service", "cognizant": "service", "tech mahindra": "service",
+    "capgemini": "service", "accenture": "service", "deloitte": "consulting",
+    "kpmg": "consulting", "pwc": "consulting", "ey": "consulting",
+    "ernst & young": "consulting", "mckinsey": "consulting",
+    "bcg": "consulting", "boston consulting group": "consulting",
+    "bain": "consulting", "bain & company": "consulting",
+    "lti": "service", "ltimindtree": "service", "mindtree": "service",
+    "mphasis": "service", "hexaware": "service", "cyient": "service",
+    "l&t infotech": "service", "persistent": "service",
+    "zensar": "service", "birlasoft": "service", "niit": "service",
+    "coforge": "service", "sonata software": "service",
+    "ibm": "hybrid", "sap": "hybrid",
+    # Startups (notable)
+    "ycombinator": "startup", "sequoia": "startup",
+}
+
+# Heuristic keywords that hint at company type from a job description
+_PRODUCT_SIGNALS = [
+    "our product", "our platform", "ship features", "product team",
+    "b2c", "b2b saas", "consumer app", "our users", "user growth",
+    "product-market fit", "product roadmap", "feature development",
+]
+_SERVICE_SIGNALS = [
+    "client projects", "client-facing", "consulting engagement",
+    "delivery team", "onsite", "offshore", "billable hours",
+    "multiple clients", "client requirements", "staffing",
+    "managed services", "it outsourcing",
+]
+
+
+@tool(
+    name="classify_companies",
+    description=(
+        "Classify companies as 'product' (product-based), 'service' (IT services/outsourcing), "
+        "'consulting' (strategy/management consulting), 'startup', or 'hybrid'. "
+        "Pass a JSON array of company names OR a JSON string from search_jobs output. "
+        "Returns JSON with each company mapped to its classification and confidence."
+    ),
+    tags=["job", "classification"],
+)
+async def classify_companies(companies_json: str) -> str:
+    """Classify companies by type — product-based, service-based, consulting, etc.
+
+    Args:
+        companies_json: JSON array of company names, e.g. '["Swiggy", "TCS", "Stripe"]'
+                        OR the full JSON output from search_jobs (will extract company names).
+    """
+    # Parse input — accept either a plain list or search_jobs output
+    try:
+        data = json.loads(companies_json)
+    except json.JSONDecodeError:
+        # Treat as a single company name
+        data = [companies_json.strip()]
+
+    company_names: List[str] = []
+    if isinstance(data, list):
+        # Could be list of strings or list of job dicts
+        for item in data:
+            if isinstance(item, str):
+                company_names.append(item)
+            elif isinstance(item, dict) and "company" in item:
+                company_names.append(item["company"])
+    elif isinstance(data, dict) and "jobs" in data:
+        # search_jobs output format
+        for job in data["jobs"]:
+            if isinstance(job, dict) and job.get("company"):
+                company_names.append(job["company"])
+
+    # Deduplicate while preserving order
+    seen_names: set = set()
+    unique_names: List[str] = []
+    for name in company_names:
+        key = name.strip().lower()
+        if key and key not in seen_names:
+            seen_names.add(key)
+            unique_names.append(name.strip())
+
+    if not unique_names:
+        return json.dumps({"error": "No company names found in input."})
+
+    classifications: List[Dict[str, Any]] = []
+
+    for name in unique_names:
+        normalized = name.lower().strip()
+        # 1. Check built-in knowledge base
+        if normalized in _COMPANY_CLASSIFICATIONS:
+            classifications.append({
+                "company": name,
+                "type": _COMPANY_CLASSIFICATIONS[normalized],
+                "confidence": "high",
+                "source": "knowledge_base",
+            })
+            continue
+
+        # 2. Check partial matches (e.g. "Tata Consultancy" matching "tcs")
+        matched = False
+        for known, ctype in _COMPANY_CLASSIFICATIONS.items():
+            if known in normalized or normalized in known:
+                classifications.append({
+                    "company": name,
+                    "type": ctype,
+                    "confidence": "medium",
+                    "source": "knowledge_base_partial",
+                })
+                matched = True
+                break
+
+        if matched:
+            continue
+
+        # 3. Web-based heuristic — search for the company
+        ctype = await _classify_company_web(name)
+        classifications.append({
+            "company": name,
+            "type": ctype,
+            "confidence": "low" if ctype == "unknown" else "medium",
+            "source": "web_heuristic",
+        })
+
+    return json.dumps({"classifications": classifications}, indent=2)
+
+
+async def _classify_company_web(company: str) -> str:
+    """Use a DuckDuckGo search to heuristically classify a company."""
+    from bs4 import BeautifulSoup
+
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(
+                "https://html.duckduckgo.com/html/",
+                params={"q": f"{company} company about product service"},
+                headers={"User-Agent": "Mozilla/5.0 (AgentForge Bot)"},
+            )
+            resp.raise_for_status()
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        text = soup.get_text().lower()
+
+        product_score = sum(1 for signal in _PRODUCT_SIGNALS if signal in text)
+        service_score = sum(1 for signal in _SERVICE_SIGNALS if signal in text)
+
+        if product_score > service_score and product_score >= 2:
+            return "product"
+        elif service_score > product_score and service_score >= 2:
+            return "service"
+        elif "consulting" in text and "partner" in text:
+            return "consulting"
+        elif "startup" in text or "seed" in text or "series a" in text:
+            return "startup"
+        else:
+            return "unknown"
+    except Exception as exc:
+        logger.debug("Web classification failed for %s: %s", company, exc)
+        return "unknown"
+
+
+# ═════════════════════════════════════════════════════════════════════
+# 9. filter_jobs — Smart Job Filtering Pipeline
+# ═════════════════════════════════════════════════════════════════════
+
+@tool(
+    name="filter_jobs",
+    description=(
+        "Filter job listings by experience level, company type, and role relevance. "
+        "Takes JSON input from search_jobs and/or classify_companies. "
+        "Returns a filtered JSON array of jobs that match the criteria."
+    ),
+    tags=["job", "filter"],
+)
+async def filter_jobs(
+    jobs_json: str,
+    min_experience_years: int = 0,
+    max_experience_years: int = 99,
+    company_types: str = "",
+    role_keywords: str = "",
+    exclude_companies: str = "",
+    remote_only: bool = False,
+    classifications_json: str = "",
+) -> str:
+    """Filter jobs by experience, company type, role relevance, and more.
+
+    Args:
+        jobs_json: JSON output from search_jobs (contains 'jobs' array).
+        min_experience_years: Minimum years of experience required (default: 0).
+        max_experience_years: Maximum years of experience to target (default: 99).
+        company_types: Comma-separated list of desired types — 'product', 'service',
+                       'consulting', 'startup' (empty = no filter).
+        role_keywords: Comma-separated keywords the role title must contain
+                       (e.g. 'backend,python,engineer'). Empty = no filter.
+        exclude_companies: Comma-separated company names to exclude.
+        remote_only: If true, only keep remote positions.
+        classifications_json: JSON output from classify_companies (optional).
+                              Used to filter by company type.
+    """
+    min_experience_years = int(min_experience_years)
+    max_experience_years = int(max_experience_years)
+
+    # Parse inputs
+    try:
+        jobs_data = json.loads(jobs_json)
+    except json.JSONDecodeError:
+        return json.dumps({"error": "Invalid jobs_json — expected JSON from search_jobs."})
+
+    jobs: List[Dict[str, Any]] = []
+    if isinstance(jobs_data, dict) and "jobs" in jobs_data:
+        jobs = jobs_data["jobs"]
+    elif isinstance(jobs_data, list):
+        jobs = jobs_data
+
+    if not jobs:
+        return json.dumps({"filtered_jobs": [], "total": 0, "reason": "No jobs in input."})
+
+    # Parse classifications
+    company_type_map: Dict[str, str] = {}
+    if classifications_json:
+        try:
+            cls_data = json.loads(classifications_json)
+            for item in cls_data.get("classifications", []):
+                company_type_map[item["company"].lower()] = item["type"]
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # Parse filter criteria
+    desired_types = {t.strip().lower() for t in company_types.split(",") if t.strip()}
+    keywords = [k.strip().lower() for k in role_keywords.split(",") if k.strip()]
+    excluded = {c.strip().lower() for c in exclude_companies.split(",") if c.strip()}
+
+    filtered: List[Dict[str, Any]] = []
+    reasons_excluded: Dict[str, int] = {
+        "company_type": 0, "role_keywords": 0, "excluded_company": 0,
+        "experience": 0, "remote": 0,
+    }
+
+    for job in jobs:
+        company = job.get("company", "").strip()
+        title = job.get("title", "").strip()
+        title_lower = title.lower()
+        company_lower = company.lower()
+
+        # 1. Exclude specific companies
+        if company_lower in excluded:
+            reasons_excluded["excluded_company"] += 1
+            continue
+
+        # 2. Company type filter
+        if desired_types:
+            ctype = company_type_map.get(company_lower, "unknown")
+            if ctype not in desired_types and ctype != "unknown":
+                reasons_excluded["company_type"] += 1
+                continue
+
+        # 3. Role keyword filter
+        if keywords:
+            if not any(kw in title_lower for kw in keywords):
+                reasons_excluded["role_keywords"] += 1
+                continue
+
+        # 4. Experience filter — extract years from title/description
+        exp_years = _extract_experience(title, job.get("description_snippet", ""))
+        if exp_years is not None:
+            if exp_years < min_experience_years or exp_years > max_experience_years:
+                reasons_excluded["experience"] += 1
+                continue
+
+        # 5. Remote filter
+        if remote_only:
+            loc = job.get("location", "").lower()
+            is_remote = job.get("is_remote", False)
+            if not is_remote and "remote" not in loc and "worldwide" not in loc:
+                reasons_excluded["remote"] += 1
+                continue
+
+        # Annotate with company type if known
+        job["company_type"] = company_type_map.get(company_lower, "unknown")
+        filtered.append(job)
+
+    output = {
+        "filtered_jobs": filtered,
+        "total": len(filtered),
+        "removed": len(jobs) - len(filtered),
+        "exclusion_reasons": {k: v for k, v in reasons_excluded.items() if v > 0},
+    }
+    return json.dumps(output, indent=2)
+
+
+def _extract_experience(title: str, description: str = "") -> Optional[int]:
+    """Try to extract years-of-experience requirement from title or description."""
+    text = f"{title} {description}".lower()
+    # Patterns: "3+ years", "5-7 years", "senior (8+)", "junior", "entry level"
+    patterns = [
+        r"(\d+)\s*\+?\s*(?:years?|yrs?)\s*(?:of)?\s*(?:experience|exp)",
+        r"(\d+)\s*-\s*\d+\s*(?:years?|yrs?)",
+        r"(\d+)\s*(?:years?|yrs?)\s*(?:experience|exp)",
+    ]
+    for pat in patterns:
+        match = re.search(pat, text)
+        if match:
+            return int(match.group(1))
+
+    # Seniority heuristics
+    if any(kw in text for kw in ["entry level", "entry-level", "junior", "fresher", "intern"]):
+        return 0
+    if any(kw in text for kw in ["mid-level", "mid level", "intermediate"]):
+        return 3
+    if any(kw in text for kw in ["senior", "sr.", "lead", "principal", "staff"]):
+        return 5
+
+    return None  # Unknown
+
+
+# ═════════════════════════════════════════════════════════════════════
+# 10. enrich_job — Company Enrichment (Clearbit + Wikipedia)
+# ═════════════════════════════════════════════════════════════════════
+
+@tool(
+    name="enrich_job",
+    description=(
+        "Enrich job listings with company metadata — employee count, industry, "
+        "founding year, domain, and description. Uses Clearbit (if API key set) "
+        "and Wikipedia as fallback. Takes JSON input from filter_jobs or search_jobs."
+    ),
+    tags=["job", "enrichment"],
+)
+async def enrich_job(jobs_json: str, max_enrichments: int = 10) -> str:
+    """Enrich job listings with company info from Clearbit and Wikipedia.
+
+    Args:
+        jobs_json: JSON from filter_jobs or search_jobs (contains 'jobs' or 'filtered_jobs').
+        max_enrichments: Max number of unique companies to enrich (default: 10).
+    """
+    max_enrichments = int(max_enrichments)
+
+    try:
+        data = json.loads(jobs_json)
+    except json.JSONDecodeError:
+        return json.dumps({"error": "Invalid JSON input."})
+
+    jobs: List[Dict[str, Any]] = []
+    if isinstance(data, dict):
+        jobs = data.get("filtered_jobs", data.get("jobs", []))
+    elif isinstance(data, list):
+        jobs = data
+
+    if not jobs:
+        return json.dumps({"enriched_jobs": [], "total": 0})
+
+    # Collect unique companies to enrich
+    seen_companies: set = set()
+    companies_to_enrich: List[str] = []
+    for job in jobs:
+        company = job.get("company", "").strip()
+        if company.lower() not in seen_companies:
+            seen_companies.add(company.lower())
+            companies_to_enrich.append(company)
+
+    # Enrich concurrently (capped)
+    enrichment_cache: Dict[str, Dict[str, Any]] = {}
+    tasks = []
+    for company in companies_to_enrich[:max_enrichments]:
+        tasks.append(_enrich_company(company))
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for company, result in zip(companies_to_enrich[:max_enrichments], results):
+        if isinstance(result, dict):
+            enrichment_cache[company.lower()] = result
+        else:
+            logger.debug("Enrichment failed for %s: %s", company, result)
+            enrichment_cache[company.lower()] = {}
+
+    # Merge enrichment data into jobs
+    for job in jobs:
+        company = job.get("company", "").strip().lower()
+        enrichment = enrichment_cache.get(company, {})
+        if enrichment:
+            job["company_info"] = enrichment
+
+    output = {
+        "enriched_jobs": jobs,
+        "total": len(jobs),
+        "companies_enriched": len([v for v in enrichment_cache.values() if v]),
+    }
+    return json.dumps(output, indent=2)
+
+
+async def _enrich_company(company: str) -> Dict[str, Any]:
+    """Enrich a single company using Clearbit and/or Wikipedia."""
+    info: Dict[str, Any] = {}
+
+    # Try Clearbit first
+    clearbit_key = os.getenv("CLEARBIT_API_KEY", "")
+    if clearbit_key:
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    "https://company.clearbit.com/v2/companies/find",
+                    params={"name": company},
+                    headers={"Authorization": f"Bearer {clearbit_key}"},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    info = {
+                        "name": data.get("name", company),
+                        "domain": data.get("domain", ""),
+                        "description": data.get("description", ""),
+                        "industry": data.get("category", {}).get("industry", ""),
+                        "employee_count": data.get("metrics", {}).get("employees", ""),
+                        "employee_range": data.get("metrics", {}).get("employeesRange", ""),
+                        "founded_year": data.get("foundedYear", ""),
+                        "location": data.get("geo", {}).get("city", ""),
+                        "country": data.get("geo", {}).get("country", ""),
+                        "tech": data.get("tech", [])[:5],
+                        "source": "clearbit",
+                    }
+                    return info
+        except Exception as exc:
+            logger.debug("Clearbit failed for %s: %s", company, exc)
+
+    # Fallback — Wikipedia summary
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(
+                "https://en.wikipedia.org/api/rest_v1/page/summary/"
+                + company.replace(" ", "_"),
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                extract = data.get("extract", "")
+                info = {
+                    "name": data.get("title", company),
+                    "description": extract[:400],
+                    "source": "wikipedia",
+                }
+
+                # Try to extract employee count from extract
+                emp_match = re.search(
+                    r"(\d[\d,]+)\s*(?:employees|staff|people|workers)",
+                    extract, re.IGNORECASE,
+                )
+                if emp_match:
+                    info["employee_count"] = int(emp_match.group(1).replace(",", ""))
+
+                # Try to extract founding year
+                year_match = re.search(
+                    r"(?:founded|established|incorporated)\s*(?:in\s*)?(\d{4})",
+                    extract, re.IGNORECASE,
+                )
+                if year_match:
+                    info["founded_year"] = int(year_match.group(1))
+
+                return info
+    except Exception as exc:
+        logger.debug("Wikipedia failed for %s: %s", company, exc)
+
+    return {"name": company, "source": "none", "description": "No enrichment data found."}
+
+
+# ═════════════════════════════════════════════════════════════════════
+# 11. rank_and_format — Score, Rank & Present Results
+# ═════════════════════════════════════════════════════════════════════
+
+@tool(
+    name="rank_and_format",
+    description=(
+        "Score and rank job listings based on configurable weights: salary, "
+        "company size/reputation, role relevance, recency, and company type. "
+        "Returns a clean formatted report. Takes JSON from enrich_job or filter_jobs."
+    ),
+    tags=["job", "ranking"],
+)
+async def rank_and_format(
+    jobs_json: str,
+    preferred_role: str = "",
+    preferred_company_type: str = "product",
+    salary_weight: float = 0.25,
+    relevance_weight: float = 0.30,
+    company_weight: float = 0.25,
+    recency_weight: float = 0.20,
+) -> str:
+    """Score, rank, and format job listings into a clean report.
+
+    Args:
+        jobs_json: JSON from enrich_job, filter_jobs, or search_jobs.
+        preferred_role: Preferred role title keywords (e.g. 'backend engineer').
+        preferred_company_type: Preferred company type — 'product', 'startup', etc.
+        salary_weight: Weight for salary score (0.0 - 1.0).
+        relevance_weight: Weight for role relevance score (0.0 - 1.0).
+        company_weight: Weight for company quality score (0.0 - 1.0).
+        recency_weight: Weight for recency score (0.0 - 1.0).
+    """
+    salary_weight = float(salary_weight)
+    relevance_weight = float(relevance_weight)
+    company_weight = float(company_weight)
+    recency_weight = float(recency_weight)
+
+    # Normalize weights
+    total_weight = salary_weight + relevance_weight + company_weight + recency_weight
+    if total_weight > 0:
+        salary_weight /= total_weight
+        relevance_weight /= total_weight
+        company_weight /= total_weight
+        recency_weight /= total_weight
+
+    try:
+        data = json.loads(jobs_json)
+    except json.JSONDecodeError:
+        return json.dumps({"error": "Invalid JSON input."})
+
+    jobs: List[Dict[str, Any]] = []
+    if isinstance(data, dict):
+        jobs = data.get("enriched_jobs", data.get("filtered_jobs", data.get("jobs", [])))
+    elif isinstance(data, list):
+        jobs = data
+
+    if not jobs:
+        return "No jobs to rank."
+
+    preferred_keywords = [k.strip().lower() for k in preferred_role.split() if k.strip()]
+    preferred_type = preferred_company_type.strip().lower()
+
+    scored_jobs: List[Dict[str, Any]] = []
+
+    for job in jobs:
+        scores: Dict[str, float] = {}
+
+        # ── Salary score (0-100) ─────────────────────────────────
+        salary_str = job.get("salary", "")
+        salary_score = 0.0
+        if salary_str:
+            # Extract numeric salary values
+            nums = re.findall(r"[\d,]+", salary_str.replace(",", ""))
+            if nums:
+                max_salary = max(int(n) for n in nums if n.isdigit())
+                # Normalize: assume $250k+ is top tier
+                salary_score = min(100.0, (max_salary / 250000) * 100)
+        scores["salary"] = salary_score
+
+        # ── Relevance score (0-100) ──────────────────────────────
+        title = job.get("title", "").lower()
+        if preferred_keywords:
+            matches = sum(1 for kw in preferred_keywords if kw in title)
+            relevance_score = (matches / len(preferred_keywords)) * 100
+        else:
+            relevance_score = 50.0  # Neutral if no preference
+        scores["relevance"] = relevance_score
+
+        # ── Company score (0-100) ────────────────────────────────
+        company_score = 50.0  # Default neutral
+        company_info = job.get("company_info", {})
+        company_type = job.get("company_type", "unknown")
+
+        # Type match bonus
+        if company_type == preferred_type:
+            company_score += 25.0
+        elif company_type == "unknown":
+            company_score += 0  # Neutral
+        else:
+            company_score -= 10.0
+
+        # Employee count bonus (larger = more stable, generally)
+        emp = company_info.get("employee_count")
+        if isinstance(emp, (int, float)) and emp > 0:
+            if emp >= 1000:
+                company_score += 15.0
+            elif emp >= 100:
+                company_score += 10.0
+            elif emp >= 10:
+                company_score += 5.0
+
+        # Has enrichment data = more reputable (findable company)
+        if company_info.get("source") in ("clearbit", "wikipedia"):
+            company_score += 10.0
+
+        company_score = min(100.0, max(0.0, company_score))
+        scores["company"] = company_score
+
+        # ── Recency score (0-100) ────────────────────────────────
+        date_str = job.get("date", "")
+        recency_score = 50.0
+        if date_str:
+            try:
+                from datetime import datetime, timezone
+                posted = datetime.strptime(date_str[:10], "%Y-%m-%d")
+                days_old = (datetime.now() - posted).days
+                if days_old <= 1:
+                    recency_score = 100.0
+                elif days_old <= 3:
+                    recency_score = 85.0
+                elif days_old <= 7:
+                    recency_score = 70.0
+                elif days_old <= 14:
+                    recency_score = 50.0
+                elif days_old <= 30:
+                    recency_score = 30.0
+                else:
+                    recency_score = 10.0
+            except ValueError:
+                pass
+        scores["recency"] = recency_score
+
+        # ── Weighted final score ─────────────────────────────────
+        final_score = (
+            scores["salary"] * salary_weight
+            + scores["relevance"] * relevance_weight
+            + scores["company"] * company_weight
+            + scores["recency"] * recency_weight
+        )
+
+        job["_scores"] = scores
+        job["_final_score"] = round(final_score, 1)
+        scored_jobs.append(job)
+
+    # Sort by final score descending
+    scored_jobs.sort(key=lambda j: j["_final_score"], reverse=True)
+
+    # ── Format clean report ──────────────────────────────────────
+    lines = [
+        f"# Job Search Results — Ranked ({len(scored_jobs)} jobs)\n",
+        f"Preferred role: {preferred_role or 'any'} | "
+        f"Preferred company type: {preferred_company_type or 'any'}\n",
+        "---\n",
+    ]
+
+    for rank, job in enumerate(scored_jobs, 1):
+        scores = job["_scores"]
+        company_info = job.get("company_info", {})
+        ctype = job.get("company_type", "")
+        ctype_tag = f" [{ctype.upper()}]" if ctype and ctype != "unknown" else ""
+
+        lines.append(f"### #{rank}  {job.get('title', 'N/A')}  —  {job.get('company', 'N/A')}{ctype_tag}")
+        lines.append(f"**Score: {job['_final_score']}/100**  "
+                      f"(Relevance: {scores['relevance']:.0f} | "
+                      f"Company: {scores['company']:.0f} | "
+                      f"Salary: {scores['salary']:.0f} | "
+                      f"Recency: {scores['recency']:.0f})")
+        lines.append("")
+
+        if job.get("salary"):
+            lines.append(f"- **Salary:** {job['salary']}")
+        lines.append(f"- **Location:** {job.get('location', 'N/A')}")
+        lines.append(f"- **Posted:** {job.get('date', 'N/A')}")
+        lines.append(f"- **Source:** {job.get('source', 'N/A')}")
+        if company_info.get("employee_count"):
+            lines.append(f"- **Company Size:** ~{company_info['employee_count']:,} employees")
+        if company_info.get("industry"):
+            lines.append(f"- **Industry:** {company_info['industry']}")
+        if company_info.get("founded_year"):
+            lines.append(f"- **Founded:** {company_info['founded_year']}")
+        lines.append(f"- **Apply:** {job.get('url', 'N/A')}")
+        lines.append("")
+        lines.append("---\n")
+
+    # Summary
+    avg_score = sum(j["_final_score"] for j in scored_jobs) / len(scored_jobs) if scored_jobs else 0
+    top_companies = list(dict.fromkeys(j.get("company", "") for j in scored_jobs[:5]))
+    lines.append(f"\n**Summary:** {len(scored_jobs)} jobs ranked. "
+                  f"Average score: {avg_score:.1f}/100. "
+                  f"Top companies: {', '.join(top_companies)}.")
+
+    return "\n".join(lines)

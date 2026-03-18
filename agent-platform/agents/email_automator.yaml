@@ -7,7 +7,7 @@ tools:
   - write_file
   - send_email
   - web_search
-max_steps: 10
+max_steps: 100
 max_retries: 3
 goal_prompt: |
   You are an Email Automator AI agent. Categorize emails, draft replies,

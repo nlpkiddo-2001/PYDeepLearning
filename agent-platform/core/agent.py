@@ -40,7 +40,7 @@ class AgentConfig:
         self.llm: Dict[str, Any] = data.get("llm", {})
         self.tools: List[str] = data.get("tools", [])
         self.memory: Dict[str, Any] = data.get("memory", {})
-        self.max_steps: int = data.get("max_steps", 15)
+        self.max_steps: int = data.get("max_steps", 100)
         self.max_retries: int = data.get("max_retries", 3)
         self.template: str = data.get("template", "")
         self.metadata: Dict[str, Any] = data.get("metadata", {})
@@ -144,9 +144,20 @@ class Agent:
 
     # ── Chat (conversational) ────────────────────────────────────
 
-    async def chat(self, message: str) -> str:
-        """Send a conversational message and get a response."""
+    async def chat(self, message: str, clear_history: bool = False) -> str:
+        """Send a conversational message and get a response.
+
+        Args:
+            message: The user message.
+            clear_history: If True, wipe short-term + long-term memory before
+                           processing (useful for starting a fresh session).
+        """
         logger.info("Chat message for agent %s: %s", self.id, message[:120])
+
+        # Optionally clear memory for a fresh session
+        if clear_history:
+            self.memory.clear_all(self.id)
+            logger.info("Cleared memory for agent %s (new session)", self.id)
 
         # Add user message to memory
         self.memory.add_message(self.id, "user", message)
@@ -205,6 +216,45 @@ class Agent:
             raise
 
     # ── Config management ────────────────────────────────────────
+
+    def reset_stats(self):
+        """Clear all run history and reset counters."""
+        self._runs.clear()
+        self._status = "idle"
+        self.memory.clear_all(self.id)
+        logger.info("Reset stats and memory for agent %s", self.id)
+
+    async def chat_stream(self, message: str, clear_history: bool = False):
+        """Stream a conversational response token-by-token (async generator).
+
+        Yields string chunks as they arrive from the LLM.
+        """
+        from typing import AsyncIterator
+        logger.info("Chat stream for agent %s: %s", self.id, message[:120])
+
+        if clear_history:
+            self.memory.clear_all(self.id)
+
+        self.memory.add_message(self.id, "user", message)
+        history = self.memory.get_conversation_history(self.id, limit=30)
+
+        system_prompt = self.config.goal_prompt or (
+            f"You are {self.name}, an AI assistant. "
+            f"{self.config.description}"
+        )
+        messages = [{"role": "system", "content": system_prompt}] + history
+
+        full_response = ""
+        try:
+            async for chunk in self.llm.stream(messages):
+                full_response += chunk
+                yield chunk
+        except Exception as exc:
+            logger.exception("Chat stream failed for agent %s: %s", self.id, exc)
+            yield f"\n\n[Error: {exc}]"
+
+        if full_response:
+            self.memory.add_message(self.id, "assistant", full_response)
 
     def update_llm_config(self, **kwargs: Any):
         """Update the LLM provider settings at runtime."""

@@ -60,6 +60,6 @@ class BaseAgentTemplate:
                 "temperature": 0.7,
                 "max_tokens": 4096,
             },
-            "max_steps": 15,
+            "max_steps": 100,
             "max_retries": 3,
         }
