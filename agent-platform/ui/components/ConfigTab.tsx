@@ -34,7 +34,7 @@ const PROVIDER_PRESETS: Record<string, Partial<ConfigState>> = {
   vllm: {
     provider: 'vllm',
     model: 'glm-5',
-    base_url: 'http://103.42.51.233:443/llm/text/api/glm5/v1',
+    base_url: '',
     api_key: '',
     temperature: 0.3,
     max_tokens: 64000,

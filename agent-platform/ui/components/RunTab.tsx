@@ -6,7 +6,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 const MODEL_OPTIONS = [
   { key: 'gemini', label: 'Gemini 3 Flash', provider: 'gemini', model: 'gemini-3-flash-preview', api_key: 'AIzaSyABiD612PXe2QKSnbfVbNHAzKcOmSCJd90' },
-  { key: 'vllm',   label: 'GLM-5 (vLLM)',   provider: 'vllm',   model: 'glm-5', base_url: 'http://103.42.51.233:443/llm/text/api/glm/v1', jwt_secret: 'eyJhbGciOiJI' },
+  { key: 'vllm',   label: 'GLM-5 (vLLM)',   provider: 'vllm',   model: 'glm-5', base_url: '', jwt_secret: '' },
 ];
 
 interface RunTabProps {
