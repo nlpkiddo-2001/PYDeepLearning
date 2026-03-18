@@ -10,18 +10,22 @@ DELETE /agents/{id}         → remove an agent
 POST   /agents/{id}/run     → run with a goal (returns task_id)
 GET    /agents/{id}/status  → current run state
 POST   /agents/{id}/chat    → send a chat message
+POST   /agents/{id}/chat/stream → stream a chat response (SSE)
 GET    /agents/{id}/memory  → inspect memory state
 DELETE /agents/{id}/memory  → clear memory
 PATCH  /agents/{id}/config  → update agent LLM config
+POST   /agents/{id}/reset   → reset run stats and memory
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, Dict, Optional, Set
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from core.agent import AgentManager
@@ -58,7 +62,7 @@ class RegisterAgentRequest(BaseModel):
     goal_prompt: str = ""
     llm: Dict[str, Any] = Field(default_factory=dict)
     tools: list = Field(default_factory=list)
-    max_steps: int = 15
+    max_steps: int = 100
     max_retries: int = 3
     template: str = ""
 
@@ -69,6 +73,7 @@ class RunRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    clear_history: bool = False  # set True to wipe memory before this message
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -78,6 +83,10 @@ class ConfigUpdateRequest(BaseModel):
     base_url: Optional[str] = None
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
+    jwt_secret: Optional[str] = None
+    jwt_algorithm: Optional[str] = None
+    jwt_expiry_minutes: Optional[int] = None
+    validate: Optional[bool] = True  # validate token on provider switch (default: yes)
 
 
 # ─── Endpoints ────────────────────────────────────────────────────
@@ -185,7 +194,7 @@ async def chat_with_agent(agent_id: str, req: ChatRequest):
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
 
     try:
-        response = await agent.chat(req.message)
+        response = await agent.chat(req.message, clear_history=req.clear_history)
         return {"agent_id": agent_id, "response": response}
     except (ConnectionError, TimeoutError) as exc:
         logger.error("LLM unreachable for agent %s: %s", agent_id, exc)
@@ -199,6 +208,45 @@ async def chat_with_agent(agent_id: str, req: ChatRequest):
             status_code=500,
             detail=f"Chat error: {exc}",
         )
+
+
+@router.post("/{agent_id}/chat/stream")
+async def chat_stream(agent_id: str, req: ChatRequest):
+    """Stream a chat response using Server-Sent Events."""
+    manager = _get_manager()
+    agent = manager.get(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+
+    async def event_generator():
+        try:
+            async for chunk in agent.chat_stream(req.message, clear_history=req.clear_history):
+                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+        except Exception as exc:
+            logger.exception("Chat stream failed for agent %s: %s", agent_id, exc)
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/{agent_id}/reset")
+async def reset_agent(agent_id: str):
+    """Reset agent stats, run history, and memory."""
+    manager = _get_manager()
+    agent = manager.get(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+    agent.reset_stats()
+    return {"status": "reset", "agent_id": agent_id}
 
 
 @router.get("/{agent_id}/memory")
@@ -228,15 +276,50 @@ async def clear_memory(agent_id: str):
 
 @router.patch("/{agent_id}/config")
 async def update_config(agent_id: str, req: ConfigUpdateRequest):
-    """Update agent LLM configuration at runtime."""
+    """Update agent LLM configuration at runtime.
+
+    When switching to the vLLM provider, the endpoint validates the token
+    (JWT or static api_key) by hitting the /v1/models endpoint before
+    committing the change. Pass `"validate": false` to skip.
+    """
     manager = _get_manager()
     agent = manager.get(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
 
     update = req.model_dump(exclude_none=True)
+    should_validate = update.pop("validate", True)
 
     if "provider" in update:
+        # ── vLLM token validation ────────────────────────────────
+        if update["provider"] == "vllm" and should_validate:
+            from llm.base import create_provider
+
+            try:
+                temp_provider = create_provider(update)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to create vLLM provider: {exc}",
+                )
+
+            result = await temp_provider.validate_token()
+            if not result.get("valid"):
+                reason = result.get("error", "Unknown error")
+                raise HTTPException(
+                    status_code=401,
+                    detail=(
+                        f"vLLM token validation failed: {reason}. "
+                        f"Ensure base_url is reachable and jwt_secret "
+                        f"(or api_key) is correct."
+                    ),
+                )
+
+            logger.info(
+                "vLLM token validated for agent %s — available models: %s",
+                agent_id, result.get("models", []),
+            )
+
         # Full provider switch
         agent.switch_provider(update)
     else:

@@ -1,4 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
+import MarkdownRenderer from './MarkdownRenderer';
+import ThinkingBlock from './ThinkingBlock';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -14,7 +16,7 @@ interface ChatTabProps {
 /* Provider presets matching agent.yaml */
 const MODEL_OPTIONS = [
   { key: 'gemini', label: 'Gemini 3 Flash', provider: 'gemini', model: 'gemini-3-flash-preview', api_key: 'AIzaSyABiD612PXe2QKSnbfVbNHAzKcOmSCJd90' },
-  { key: 'vllm',   label: 'GLM-5 (vLLM)',   provider: 'vllm',   model: 'glm-5', base_url: 'http://103.42.51.233:443/llm/text/api/glm5/v1' },
+  { key: 'vllm',   label: 'GLM-5 (vLLM)',   provider: 'vllm',   model: 'glm-5', base_url: 'http://103.42.51.233:443/llm/text/api/glm/v1', jwt_secret: 'eyJhbGciOiJI' },
 ];
 
 export default function ChatTab({ agentId }: ChatTabProps) {
@@ -75,6 +77,7 @@ export default function ChatTab({ agentId }: ChatTabProps) {
       const body: Record<string, any> = { provider: opt.provider, model: opt.model };
       if ((opt as any).api_key) body.api_key = (opt as any).api_key;
       if ((opt as any).base_url) body.base_url = (opt as any).base_url;
+      if ((opt as any).jwt_secret) body.jwt_secret = (opt as any).jwt_secret;
 
       const resp = await fetch(`${API_BASE}/agents/${agentId}/config`, {
         method: 'PATCH',
@@ -85,7 +88,8 @@ export default function ChatTab({ agentId }: ChatTabProps) {
         setActiveModel(key);
       } else {
         const err = await resp.json();
-        alert(`Failed to switch model: ${err.detail}`);
+        const detail = typeof err.detail === 'object' ? JSON.stringify(err.detail) : err.detail;
+        alert(`Failed to switch model: ${detail}`);
       }
     } catch (err) {
       alert(`Network error switching model: ${err}`);
@@ -187,12 +191,11 @@ export default function ChatTab({ agentId }: ChatTabProps) {
           <div key={i} className={`chat-message ${msg.role}`}>
             <div className="msg-role">{msg.role}</div>
             <div className="msg-bubble">
-              {msg.content.split('\n').map((line, j) => (
-                <React.Fragment key={j}>
-                  {line}
-                  {j < msg.content.split('\n').length - 1 && <br />}
-                </React.Fragment>
-              ))}
+              {msg.role === 'assistant' ? (
+                <ThinkingBlock content={msg.content} />
+              ) : (
+                <MarkdownRenderer content={msg.content} />
+              )}
             </div>
           </div>
         ))}

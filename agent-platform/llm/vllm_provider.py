@@ -8,7 +8,7 @@ Example config in agent.yaml:
     llm:
       provider: "vllm"
       model: "glm-5"
-      base_url: "http://103.42.51.225:443/llm/text/api/glm5/v1"
+      base_url: "http://103.42.51.234:443/llm/text/api/glm/v1"
       jwt_secret: "eyJhbGciOiJI"
       jwt_algorithm: "HS256"
       jwt_expiry_minutes: 15
@@ -115,6 +115,161 @@ class VLLMProvider(LLMProvider):
             "Content-Type": "application/json",
             "Authorization": f"Bearer {token}",
         }
+
+    async def validate_token(self) -> Dict[str, Any]:
+        """Validate connectivity and authentication against the vLLM server.
+
+        Strategy:
+        1. Try GET {base_url}/models (standard OpenAI-compatible listing).
+        2. If /models returns 404 (common behind API gateways / proxies that
+           only expose /chat/completions), fall back to a minimal POST to
+           {base_url}/chat/completions with max_tokens=1 so we can still
+           verify the server is reachable and auth is accepted.
+
+        Returns:
+            {"valid": True, "models": [...]} on success
+            {"valid": False, "error": "..."} on failure
+        """
+        base = (self.base_url or "").rstrip("/")
+        if not base:
+            return {"valid": False, "error": "base_url is not set."}
+
+        # Strip /chat/completions or /completions suffix to get the root /v1
+        for suffix in ("/chat/completions", "/completions"):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                break
+
+        models_url = f"{base}/models"
+        headers = self._build_headers()
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(models_url, headers=headers)
+
+                if resp.status_code == 401:
+                    return {
+                        "valid": False,
+                        "error": "Authentication failed (HTTP 401). "
+                                 "Check jwt_secret or api_key.",
+                    }
+                if resp.status_code == 403:
+                    return {
+                        "valid": False,
+                        "error": "Authorization denied (HTTP 403). "
+                                 "Token is valid but lacks permission.",
+                    }
+
+                # /models not exposed (gateway/proxy) — fall back to a
+                # lightweight chat completions probe.
+                if resp.status_code == 404:
+                    return await self._validate_via_chat_probe(client, base, headers)
+
+                resp.raise_for_status()
+                data = resp.json()
+                model_ids = [
+                    m.get("id", "") for m in data.get("data", [])
+                ]
+                return {"valid": True, "models": model_ids}
+
+        except httpx.ConnectError as exc:
+            return {
+                "valid": False,
+                "error": f"Cannot reach vLLM server at {models_url}: {exc}",
+            }
+        except httpx.TimeoutException:
+            return {
+                "valid": False,
+                "error": f"Connection to {models_url} timed out (15s).",
+            }
+        except httpx.HTTPStatusError as exc:
+            return {
+                "valid": False,
+                "error": f"HTTP {exc.response.status_code}: {exc.response.text[:300]}",
+            }
+        except Exception as exc:
+            return {
+                "valid": False,
+                "error": f"Unexpected error: {exc}",
+            }
+
+    async def _validate_via_chat_probe(
+        self,
+        client: httpx.AsyncClient,
+        base: str,
+        headers: Dict[str, str],
+    ) -> Dict[str, Any]:
+        """Fall-back validation when /models is not available (404).
+
+        Sends a minimal chat completion request (max_tokens=1) to confirm
+        the server is reachable and the auth token is accepted.  We don't
+        care about the reply content — any 2xx (or a 400 for bad schema)
+        means both connectivity and authentication are fine.
+        """
+        chat_url = f"{base}/chat/completions"
+        probe_body = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 1,
+        }
+        logger.debug(
+            "/models returned 404 — probing %s instead", chat_url,
+        )
+        try:
+            probe = await client.post(chat_url, headers=headers, json=probe_body)
+
+            if probe.status_code == 401:
+                return {
+                    "valid": False,
+                    "error": "Authentication failed (HTTP 401). "
+                             "Check jwt_secret or api_key.",
+                }
+            if probe.status_code == 403:
+                return {
+                    "valid": False,
+                    "error": "Authorization denied (HTTP 403). "
+                             "Token is valid but lacks permission.",
+                }
+            if probe.status_code == 404:
+                return {
+                    "valid": False,
+                    "error": (
+                        f"Both {base}/models and {chat_url} returned 404. "
+                        f"Check that base_url is correct."
+                    ),
+                }
+
+            # Any 2xx or even a 400 (bad request body) confirms the server
+            # is up and auth succeeded.
+            if 200 <= probe.status_code < 500:
+                return {
+                    "valid": True,
+                    "models": [self.model],
+                    "note": "/models not available; validated via chat completions probe.",
+                }
+
+            # Unexpected server error
+            return {
+                "valid": False,
+                "error": f"Chat probe returned HTTP {probe.status_code}: "
+                         f"{probe.text[:300]}",
+            }
+
+        except httpx.ConnectError as exc:
+            return {
+                "valid": False,
+                "error": f"Cannot reach vLLM server at {chat_url}: {exc}",
+            }
+        except httpx.TimeoutException:
+            return {
+                "valid": False,
+                "error": f"Connection to {chat_url} timed out (15s).",
+            }
+        except Exception as exc:
+            return {
+                "valid": False,
+                "error": f"Chat probe unexpected error: {exc}",
+            }
 
     def _build_request_body(
         self,

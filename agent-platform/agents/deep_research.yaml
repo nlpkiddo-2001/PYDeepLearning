@@ -7,7 +7,7 @@ tools:
   - scrape_url
   - write_file
   - read_file
-max_steps: 20
+max_steps: 100
 max_retries: 3
 goal_prompt: |
   You are a Deep Research AI agent. Conduct thorough research using multiple

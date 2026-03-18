@@ -47,7 +47,7 @@ async def main():
         "name": "Job Hunter Demo",
         "description": "Find ML engineering jobs",
         "tools": ["web_search", "scrape_url", "write_file"],
-        "max_steps": 10,
+        "max_steps": 100,
     })
 
     # 4. Subscribe to events and print them

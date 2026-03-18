@@ -1,0 +1,34 @@
+# ── Core Framework ──
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+websockets>=12.0
+pydantic>=2.6.0
+starlette>=0.36.0
+
+# ── Config & Templating ──
+pyyaml>=6.0
+python-dotenv>=1.0.0
+jinja2>=3.1.0
+
+# ── HTTP & Networking ──
+httpx>=0.27.0
+
+# ── LLM Providers ──
+openai>=1.12.0
+anthropic>=0.21.0
+google-genai>=1.0.0
+
+# ── Vector Store & DB ──
+chromadb>=0.4.24
+aiosqlite>=0.20.0
+
+# ── Web Scraping & Browser Automation ──
+beautifulsoup4>=4.12.0
+playwright>=1.44.0
+playwright-stealth>=1.0.6
+
+# ── Auth ──
+PyJWT>=2.8.0
+
+# ── File Watching ──
+watchdog>=4.0.0

@@ -4,6 +4,11 @@ import { useAgentStream } from '../hooks/useAgentStream';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+const MODEL_OPTIONS = [
+  { key: 'gemini', label: 'Gemini 3 Flash', provider: 'gemini', model: 'gemini-3-flash-preview', api_key: 'AIzaSyABiD612PXe2QKSnbfVbNHAzKcOmSCJd90' },
+  { key: 'vllm',   label: 'GLM-5 (vLLM)',   provider: 'vllm',   model: 'glm-5', base_url: 'http://103.42.51.233:443/llm/text/api/glm/v1', jwt_secret: 'eyJhbGciOiJI' },
+];
+
 interface RunTabProps {
   agentId: string;
 }
@@ -12,25 +17,62 @@ export default function RunTab({ agentId }: RunTabProps) {
   const [goal, setGoal] = useState('');
   const [activeGoal, setActiveGoal] = useState('');
   const [loading, setLoading] = useState(false);
+  const [activeModel, setActiveModel] = useState('gemini');
+  const [switching, setSwitching] = useState(false);
 
   const { events, connected, isRunning, connect, clearEvents, pollEvents } = useAgentStream({
     agentId,
     autoConnect: true,
   });
 
-  // ── Polling fallback: while a run is active, poll every 3s in case WS missed events ──
+  // Detect current model from agent info
+  useEffect(() => {
+    (async () => {
+      try {
+        const resp = await fetch(`${API_BASE}/agents/${agentId}`);
+        if (resp.ok) {
+          const data = await resp.json();
+          const prov = data.llm?.provider;
+          if (prov) {
+            const match = MODEL_OPTIONS.find(m => m.provider === prov);
+            if (match) setActiveModel(match.key);
+          }
+        }
+      } catch {}
+    })();
+  }, [agentId]);
+
+  // Model switch handler
+  const handleModelSwitch = useCallback(async (key: string) => {
+    if (key === activeModel || switching) return;
+    const opt = MODEL_OPTIONS.find(m => m.key === key);
+    if (!opt) return;
+
+    setSwitching(true);
+    try {
+      const body: Record<string, any> = { provider: opt.provider, model: opt.model };
+      if ((opt as any).api_key) body.api_key = (opt as any).api_key;
+      if ((opt as any).base_url) body.base_url = (opt as any).base_url;
+      if ((opt as any).jwt_secret) body.jwt_secret = (opt as any).jwt_secret;
+
+      const resp = await fetch(`${API_BASE}/agents/${agentId}/config`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (resp.ok) setActiveModel(key);
+    } catch {}
+    setSwitching(false);
+  }, [activeModel, agentId, switching]);
+
+  // Polling fallback
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const runActiveRef = useRef(false);
 
   useEffect(() => {
-    // Start polling when we know a run was submitted but haven't received a "done" event
     if (runActiveRef.current && !pollRef.current) {
-      pollRef.current = setInterval(() => {
-        pollEvents();
-      }, 3000);
+      pollRef.current = setInterval(() => { pollEvents(); }, 3000);
     }
-
-    // Stop polling once "done" or "error" event arrives
     const lastEvent = events[events.length - 1];
     if (lastEvent && (lastEvent.type === 'done' || lastEvent.type === 'error')) {
       runActiveRef.current = false;
@@ -39,12 +81,8 @@ export default function RunTab({ agentId }: RunTabProps) {
         pollRef.current = null;
       }
     }
-
     return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     };
   }, [events, pollEvents]);
 
@@ -55,7 +93,6 @@ export default function RunTab({ agentId }: RunTabProps) {
     setActiveGoal(goal.trim());
     clearEvents();
 
-    // Ensure WebSocket is connected
     if (!connected) connect();
 
     try {
@@ -68,7 +105,6 @@ export default function RunTab({ agentId }: RunTabProps) {
         const err = await resp.json();
         alert(`Error: ${err.detail || 'Failed to start run'}`);
       } else {
-        // Mark run as active to enable polling fallback
         runActiveRef.current = true;
       }
     } catch (err) {
@@ -87,6 +123,25 @@ export default function RunTab({ agentId }: RunTabProps) {
 
   return (
     <div className="run-tab">
+      {/* Model selector bar */}
+      <div className="model-selector-bar">
+        <span className="model-selector-label">Model:</span>
+        <div className="model-selector-buttons">
+          {MODEL_OPTIONS.map((opt) => (
+            <button
+              key={opt.key}
+              className={`model-btn ${activeModel === opt.key ? 'active' : ''}`}
+              onClick={() => handleModelSwitch(opt.key)}
+              disabled={switching}
+              title={`${opt.provider} — ${opt.model}`}
+            >
+              {opt.key === 'gemini' ? '✦' : '⚡'} {opt.label}
+            </button>
+          ))}
+        </div>
+        {switching && <span className="model-switching">Switching…</span>}
+      </div>
+
       <div className="goal-input-area">
         <div className="goal-input-row">
           <input
