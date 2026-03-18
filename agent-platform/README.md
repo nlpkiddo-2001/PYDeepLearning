@@ -2,7 +2,7 @@
 
 **A lightweight, self-hostable agentic AI platform.** Build autonomous agents with any LLM provider, wire them to tools, and test them through a built-in UI — no expensive SaaS required.
 
-> Zapier AI + LangChain + Agent Workflows + Built-in Testing UI = **AgentForge**
+![Demo](./output.gif)
 
 ---
 
