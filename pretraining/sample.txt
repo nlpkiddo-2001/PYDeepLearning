@@ -1,0 +1,40 @@
+Future Iteration:
+
+    1. Pretraining:
+        1.1
+            Training a 200M model with around 11T Tokens
+            Phase 1 Training: Base Training - 8T Tokens
+            Phase 2 Training: High quality training - 2T Tokens
+            Phase 3 Training: Upsampling with high quality instruction dataset and reasoning data
+
+            Dataset: FineWeb-Edu, Cosmopedia v2, Python-Edu
+        1.2
+            Training with a fixed context length of 4096.
+
+        1.3
+            Evaluation dataset includes
+                MMLU, ARC-Challenge, and HellaSwag on the base checkpoint
+
+    2. Mid Training (16k context length scaling):
+        2.1
+            Taking the same checkpoint from previous pretraining run.
+            Use a higher-quality subset of Phase 1 (e.g 50B tokens of pure FineWeb-Edu or FineMath)
+            data is "packed" to the new 16k limit
+
+        2.2
+            Eval dataset such as
+                (NIAH) to check if model is able to retrieve the information
+                RULER Benchmark: SmolLM team dataset to verify long-context reasoning.
+
+    3. Fine tuning:
+        3.1
+            HuggingFaceTB/smoltalk official instruction tuning dataset
+            Open-Hermes-2.5: instruction fine tuning dataset
+
+        3.2
+            Eval:
+                IFEval (Instruction Following Evaluation)
+                GSM8K
+                MT-Bench
+
+
