@@ -24,34 +24,21 @@ Write our own SFT training loop for 2–4B dense models on agentic tasks (tool c
 
 | File | State |
 |---|---|
-| `sft/data/chat_tokenizer.py` | Segments 1–7 done and checked by hand. **Missing the segment 8 helpers** (see pending work). |
-| `sft/data/packing.py` | `PackedRow`, `make_row`, `pack_greedy` done and checked (`[[4, 3], [5, 2]]` for lengths 4, 3, 5, 2 with `pack_len=8`). |
+| `sft/data/chat_tokenizer.py` | Done: tokenizer, Qwen3 and default adapters, `render_labels`, `PROBE_RECORD`, `probe_template`. |
+| `sft/data/packing.py` | Done: `PackedRow`, `make_row`, `pack_greedy`. |
 | `sft/data/normalize.py` | Docstring only. Not needed, because the data team sends the canonical format. |
-| `tests/test_chat_tokenizer.py` | 17 tests. **Currently fails to import**: needs `PROBE_RECORD`, `probe_template`, `render_labels`. |
-| `tests/test_tokenize.py` | **Stale.** Imports `sft.data.tokenize`, which was deleted. |
+| `tests/test_chat_tokenizer.py` | 17 tests, all passing. |
+| `tests/test_packing.py` | 8 tests, all passing. |
 | `tests/fixtures/sample.jsonl` | 3 test records. |
 | `conftest.py` | Empty, so pytest can `import sft`. |
 | `practice.ipynb` | Scratch notebook. Its kernel uses `/opt/conda/envs/vllm_env`, a different env from the terminal. |
 
-## Pending work (finish before the training loop)
+Run all tests: `cd /root/finetune && python -m pytest tests/ -q` (25 pass).
 
-1. **Add the segment 8 helpers to `chat_tokenizer.py`:**
-   - `render_labels(sample, tokenizer) -> str`: decode a sample with supervised parts wrapped in `[[ ]]`.
-   - `PROBE_RECORD`: fixed test conversation with a system message, a `get_weather` tool, reasoning, 2 parallel tool calls, 2 tool results and a final answer.
-   - `probe_template(chat_tokenizer) -> list[str]`: render `PROBE_RECORD`, check the generic strings (`Paris`, `Rome`, `18C, sunny`, `get_weather`) and the adapter's `probe_expectations`, then require at least one sample from tokenizing it. Returns the problems found (empty = OK).
-2. **Run the tokenizer tests**, and make all 17 pass:
-   ```bash
-   cd /root/finetune && python -m pytest tests/test_chat_tokenizer.py -q
-   ```
-3. **Delete `tests/test_tokenize.py`.** It points at the deleted module.
-4. **Add packing tests** in `tests/test_packing.py`:
-   - The `make_row` example: labels `[-100, 11, 12, -100, 21]`, `position_ids` `[0, 1, 2, 0, 1]`, `num_supervised == 3`.
-   - Greedy: `[[4, 3], [5, 2]]`. No row longer than `pack_len`. Every sample kept, in order. An oversize sample raises `ValueError`.
-5. **Set up git** so overwritten work can be recovered:
-   ```bash
-   cd /root/finetune && git init && git add -A && git commit -m "tokenizer + greedy packing"
-   ```
-6. **Optional:** switch the notebook kernel to `/root/miniconda3/envs/vllm/bin/python`. Add `%load_ext autoreload` and `%autoreload 2` in the first cell, so edits are picked up without restarting.
+The folder is a git repo now: commit after each step that passes.
+
+## Pending work
+None blocking. Optional: switch the notebook kernel to `/root/miniconda3/envs/vllm/bin/python` and add `%load_ext autoreload` / `%autoreload 2` in its first cell.
 
 ## Next: the SFT training loop
 Build it in steps, each runnable before the next. Start with a stand-in for the stream (a JSONL file read on each GPU). The real streaming loader replaces it later without changing the loop.
