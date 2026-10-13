@@ -53,21 +53,42 @@ class TrainConfig:
     grad_accum_steps : int = 1
 
 
-def row_stream(path: str, chat_tok: ChatTokenizer, pack_len: int, rejections: Counter) -> Iterator[PackedRow]:
+def row_stream(
+    path: str,
+    chat_tok: ChatTokenizer,
+    pack_len: int,
+    rejections: Counter,
+    rank: int = 0,
+    world_size: int = 1,
+) -> Iterator[PackedRow]:
     """
     Reads data → tokenizes conversations → packs samples into rows
+
+    Sharding: rank r keeps lines r, r+W, r+2W, ... (round-robin, W = world_size).
+    - split on lines, before json.loads/tokenization, so the CPU work is split W ways too
+    - round-robin needs no file length (works for streams) and mixes sorted data across ranks
+    - defaults rank=0, world_size=1 keep every line -> single-GPU behaviour unchanged
     """
     def samples():
         while True:
+            n_yielded = 0
             with open(path) as file:
-                for line in file:
-                    if not line.strip():
+                for line_idx, line in enumerate(file):
+                    if line_idx % world_size != rank or not line.strip(): # otherwisw every rank would parse every line
                         continue
 
                     res = chat_tok(json.loads(line))
                     for r in res.rejections:
                         rejections[r.reason.value] += 1
+                    n_yielded += len(res.samples)
                     yield from res.samples
+
+            # a rank with no samples would loop here forever without streaming and would, never reach the first all_reduce, and every other rank would wait on it.
+            if n_yielded == 0:
+                raise RuntimeError(
+                    f"rank {rank}/{world_size}: no usable samples in {path} "
+                    f"(needs >= {world_size} lines with train turns; rejections so far: {dict(rejections)})"
+                )
     yield from pack_greedy(samples(), pack_len)
 
 
