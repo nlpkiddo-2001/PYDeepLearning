@@ -40,13 +40,13 @@ def make_row(samples: list[TokenizedSample]):
         n = len(sample.input_ids)
         input_ids.extend(sample.input_ids)
 
-        labels.append(IGNORE_INDEX)
+        labels.append(IGNORE_INDEX) # causal attn shouldn't look another sequence first token from previous sequence last token.
         labels.extend(sample.labels[1:])
         position_ids.extend(range(n))
         seq_lens.append(n)
         sample_ids.append(sample.meta["id"])
 
-    num_supervised = sum(l != IGNORE_INDEX for l in labels)
+    num_supervised = sum(l != IGNORE_INDEX for l in labels) # we need this when computing the actual loss, to assert the num of valid tokens.
     return PackedRow(input_ids, labels, position_ids, seq_lens, num_supervised, sample_ids)
 
 
