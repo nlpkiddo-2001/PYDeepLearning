@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+
+# training data and run outputs: never commit
+/data/
+/runs/
+# training data anywhere in the tree (keep the small test fixtures)
+*.jsonl
+!tests/fixtures/*.jsonl
