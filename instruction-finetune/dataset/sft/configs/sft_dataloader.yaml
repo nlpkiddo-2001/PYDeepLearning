@@ -1,0 +1,45 @@
+# Starting-point mixture (hypotheses to be tested with the proxy sweep, not conclusions).
+# Weights are shares of packed TOKENS. Run from Instruction_taining/:
+#   python -m sft_data.cli compile --config sft_data/mixes/baseline.yaml
+#   python -m sft_data.cli stats   --config sft_data/mixes/baseline.yaml --budget-tokens 1e9
+data_root: /workspace/RAG/experiment/Instruction_taining/out
+cache_dir: sft_cache
+tokenizer: Qwen/Qwen2.5-7B-Instruct
+token_config:
+  instruct_start: <|im_start|>
+  assistant_token: assistant
+  instruct_end: <|im_end|>
+seq_len: 32000
+over_length: truncate        # cut long agent trajectories at the last complete assistant turn
+seed: 0
+alpha: 0.5                   # within-domain temperature smoothing (used where sources have no explicit weight)
+max_epochs: 3.0              # default cap on passes over any one source
+val_fraction: 0.01
+val_max_samples_per_source: 2000
+license_deny: []   # e.g. apigen_mt is non-commercial
+micro_batch_size: 4
+decontam: required           # every source needs a current dataset/decontaminate.py result (benchmark overlap dropped)
+decontam_min_coverage: 0.1   # 0 = drop any 13-gram hit; raise (e.g. 0.3) only after reviewing out/decontam_report.md
+
+domains:
+  chat:
+    weight: 0.38
+    sources:
+      smoltalk: {}
+  coding:
+    weight: 0.28
+    sources:                 # opencodeinstruct is 75% of coding tokens: explicit weights cap it at half
+      opencodeinstruct: {weight: 0.5}
+      swe_smith: {weight: 0.5}
+  tool_calling:
+    weight: 0.26
+    sources:                 # no weights -> alpha smoothing over token counts
+      toucan_sft: {}
+      glaive_fc: {}
+      toolace: {}
+      when2call: {}
+      apigen_mt: {}
+  roleplay:
+    weight: 0.08
+    sources:
+      sonnet_charcard: {max_epochs: 3.0}

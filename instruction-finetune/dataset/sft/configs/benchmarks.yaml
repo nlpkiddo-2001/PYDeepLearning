@@ -1,0 +1,105 @@
+# Eval benchmarks checked by decontaminate.py. Any training sample sharing an n-gram (default 13 words)
+# with a benchmark item's text is flagged; sft_data drops flagged samples (see `decontam` in the mix config).
+#
+# Per entry:
+#   name, repo                      required
+#   config / split                  HF config and split(s) (split: all = every split)          loader: hf (default)
+#   files                           repo files to read as JSON / JSONL instead (no dataset script)  loader: hf_files
+#   fields                          dotted paths; every string under them is benchmark text (lists / dicts recurse)
+#   id_field                        item id for the report (default: row index)
+#   enabled: false                  opt-in benchmarks (large download)
+#
+# Only put text here that a model must NOT have seen: prompts and reference solutions. Tool schemas are left
+# out on purpose, because public API docs are shared legitimately between benchmarks and training sets.
+
+ngram: 13            # words per n-gram (lowercased \w+ tokens)
+min_words: 8         # items shorter than `ngram` are matched as a whole if they have at least this many words
+max_items_per_ngram: 5   # n-grams shared by more benchmark items than this are template text, not leakage
+
+benchmarks:
+  # ------------------------------------------------------------------ coding
+  - name: humaneval
+    repo: openai/openai_humaneval
+    split: test
+    fields: [prompt, canonical_solution]
+    id_field: task_id
+
+  - name: mbpp
+    repo: google-research-datasets/mbpp
+    config: full
+    split: test
+    fields: [text, code]
+    id_field: task_id
+
+  - name: mbppplus
+    repo: evalplus/mbppplus
+    split: test
+    fields: [prompt, code]
+    id_field: task_id
+
+  - name: swebench_verified
+    repo: princeton-nlp/SWE-bench_Verified
+    split: test
+    fields: [problem_statement, patch]
+    id_field: instance_id
+
+  - name: livecodebench
+    repo: livecodebench/code_generation_lite
+    loader: hf_files
+    files: [test.jsonl, test2.jsonl, test3.jsonl, test4.jsonl, test5.jsonl, test6.jsonl]   # 4.2 GB (hidden tests)
+    fields: [question_content]
+    id_field: question_id
+    enabled: false
+
+  # ------------------------------------------------------------------ tool calling
+  - name: when2call_test
+    repo: nvidia/When2Call
+    config: test
+    split: all
+    fields: [question, orig_question]
+    id_field: uuid
+
+  - name: bfcl_v3
+    repo: gorilla-llm/Berkeley-Function-Calling-Leaderboard
+    loader: hf_files
+    files: [BFCL_v3_simple.json, BFCL_v3_multiple.json, BFCL_v3_parallel.json, BFCL_v3_parallel_multiple.json,
+            BFCL_v3_irrelevance.json, BFCL_v3_java.json, BFCL_v3_javascript.json, BFCL_v3_sql.json,
+            BFCL_v3_rest.json, BFCL_v3_chatable.json, BFCL_v3_exec_simple.json, BFCL_v3_exec_multiple.json,
+            BFCL_v3_exec_parallel.json, BFCL_v3_exec_parallel_multiple.json,
+            BFCL_v3_live_simple.json, BFCL_v3_live_multiple.json, BFCL_v3_live_parallel.json,
+            BFCL_v3_live_parallel_multiple.json, BFCL_v3_live_irrelevance.json, BFCL_v3_live_relevance.json,
+            BFCL_v3_multi_turn_base.json, BFCL_v3_multi_turn_composite.json, BFCL_v3_multi_turn_long_context.json,
+            BFCL_v3_multi_turn_miss_func.json, BFCL_v3_multi_turn_miss_param.json]
+    fields: [question]
+    id_field: id
+
+  # ------------------------------------------------------------------ chat / instruction following
+  - name: ifeval
+    repo: google/IFEval
+    split: train
+    fields: [prompt]
+    id_field: key
+
+  - name: mt_bench
+    repo: HuggingFaceH4/mt_bench_prompts
+    split: train
+    fields: [prompt, reference]
+    id_field: prompt_id
+
+  - name: arena_hard
+    repo: lmarena-ai/arena-hard-auto-v0.1
+    split: train
+    fields: [turns]
+    id_field: question_id
+
+  - name: alpaca_eval
+    repo: tatsu-lab/alpaca_eval
+    loader: hf_files
+    files: [alpaca_eval.json]
+    fields: [instruction]
+
+  - name: gsm8k
+    repo: openai/gsm8k
+    config: main
+    split: test
+    fields: [question, answer]
