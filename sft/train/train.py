@@ -28,6 +28,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from sft.train.parallel import DistInfo, shard_model, all_reduce_sum, full_tensor, set_grad_sync, cleanup_distributed, init_distributed
 from sft.data.chat_tokenizer import IGNORE_INDEX, ChatTokenizer, TokenizerConfig
 from sft.data.packing import PackedRow, pack_greedy
 
@@ -51,6 +52,7 @@ class TrainConfig:
     overfit_one_row : bool = False
     max_seq_len : int = 4096
     grad_accum_steps : int = 1
+    sync_every_micro_batch : bool = False
 
 
 def row_stream(
@@ -105,15 +107,25 @@ def collate(row: PackedRow, device: str):
     }
 
 
-def load_model(cfg: TrainConfig):
+def load_model(cfg: TrainConfig, info: DistInfo | None = None):
+    info = info or DistInfo(device=cfg.device)
+
     model = AutoModelForCausalLM.from_pretrained(
         cfg.model_name,
         dtype = torch.float32, # float 32 contains master weights, and when doing compute we can autocast it to bf16 aka mixed precision training
         attn_implementation="sdpa"
-    ).to(cfg.device)
+    )
+
     model.config.use_cache = False
     if cfg.grad_checkpointing:
         model.gradient_checkpointing_enable()
+
+    if info.enabled:
+        model.to(info.device)
+        shard_model(model)
+    else:
+        model.to(cfg.device)
+
     model.train()
     return model
 
@@ -167,18 +179,50 @@ def compute_loss_sum(model, batch: dict, device: str, autocast: bool = True) -> 
         reduction="sum"
     )
 
+def accumulate_grads(
+        model,
+        micro_rows: list[PackedRow],
+        info: DistInfo,
+        device: str,
+        autocast : bool = True,
+        sync_every_micro_batch : bool = False
+) -> tuple[float, float]:
+    """
+    Forward/backward over THIS rank's micro-batches.
+    returns (this rank's loss sum, GLOBAL supervised count).
+    """
+    num_supervised = all_reduce_sum(sum(r.num_supervised for r in micro_rows), info)
+    if num_supervised == 0:
+        return 0.0, 0
 
-def train(cfg: TrainConfig, model=None, tokenizer=None) -> list[float]:
+    scale = info.world_size / num_supervised
+
+    step_loss_sum = 0.0
+    for i , row in enumerate(micro_rows):
+        is_last = i == len(micro_rows) - 1
+        set_grad_sync(model, is_last or sync_every_micro_batch)
+
+        batch = collate(row, device)
+        loss_sum = compute_loss_sum(model, batch, device, autocast=autocast)
+        (loss_sum * scale).backward()
+        step_loss_sum += loss_sum.item()
+    return step_loss_sum, num_supervised
+
+
+def train(cfg: TrainConfig, model=None, tokenizer=None, info: DistInfo | None = None) -> list[float]:
+    info = info or DistInfo(device=cfg.device)
+    device = info.device if info.enabled else cfg.device
     torch.manual_seed(cfg.seed)
 
     tokenizer = tokenizer or AutoTokenizer.from_pretrained(cfg.model_name)
     chat_tok = ChatTokenizer(tokenizer, TokenizerConfig(max_seq_len=cfg.max_seq_len))
     rejections: Counter = Counter()
-    rows = row_stream(path=cfg.data_path, chat_tok=chat_tok, pack_len=cfg.max_seq_len, rejections=rejections)
+    rows = row_stream(path=cfg.data_path, chat_tok=chat_tok, pack_len=cfg.max_seq_len, rejections=rejections, rank=info.rank, world_size=info.world_size)
 
-    model = model or load_model(cfg)
+    model = model or load_model(cfg, info)
     opt = build_optimiser(model, cfg)
     scd = build_scheduler(opt, cfg)
+    autocast = not info.enabled
 
     losses = []
     fixed_rows = next(rows) if cfg.overfit_one_row else None
@@ -186,45 +230,86 @@ def train(cfg: TrainConfig, model=None, tokenizer=None) -> list[float]:
     for step in range(cfg.total_steps):
         t0 = time.perf_counter()
 
-        # step 1: fetch micro batches, num_supervised must be known
+        # step 1 fetch micro batches, num supervised must be known
         micro_rows = [fixed_rows or next(rows) for _ in range(cfg.grad_accum_steps)]
-        num_supervised = sum(r.num_supervised for r in micro_rows)
+
+        # step 2: forward/backward, global denominator, one reduce-scatter
+        step_loss_sum, num_supervised = accumulate_grads(model, micro_rows, info, device, autocast, cfg.sync_every_micro_batch)
+
         if num_supervised == 0:
             logger.warning(f"num supervised token is 0 for step {step}")
             continue
 
-        # step 2: forward/backwar per batch , all divided by same step level count
-        step_loss_sum = 0.0 # just overall loss for logging
-        for row in micro_rows:
-            batch = collate(row, cfg.device)
-            loss_sum = compute_loss_sum(model, batch, cfg.device)
-            (loss_sum / num_supervised).backward()
-            step_loss_sum += loss_sum.item() # just overall loss for logging
-
-        # step 3: one optimiser step per step, not for per batch
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+        # step 3: clip on full tensor from DTensor 
+        grad_norm = full_tensor(torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip))
         if not torch.isfinite(grad_norm):
             logger.warning(f"step {step}: non-finite grad norm {grad_norm}, skipping update")
             opt.zero_grad(set_to_none=True)
             continue
 
-        # opt.step is placed outside, because we want all micro-batches to calculate gradients using the same model weights.
         opt.step()
         scd.step()
         opt.zero_grad(set_to_none=True)
 
-        loss = step_loss_sum / num_supervised # just overall loss for logging
+        loss = all_reduce_sum(step_loss_sum, info) / num_supervised
         losses.append(loss)
-        if step % cfg.log_every == 0:
-            dt = time.perf_counter() - t0
-            num_tokens = sum(len(r.input_ids) for r in micro_rows)
-            logger.info(
-                "step %4d | loss %.4f | gnorm %.3f | lr %.2e | rows %d | tokens %d | sup %d | %.0f tok/s | rejected %s",
-                step, loss, grad_norm.item(), scd.get_last_lr()[0],
-                len(micro_rows), num_tokens, num_supervised, num_tokens / dt, dict(rejections),
-            )
 
-    return losses 
+        if step % cfg.log_every == 0:
+            num_tokens = all_reduce_sum(sum(len(r.input_ids) for r in micro_rows), info)
+            dt = time.perf_counter() - t0
+            if info.is_main:
+                logger.info(
+                    "step %4d | loss %.4f | gnorm %.3f | lr %.2e | rows %d | tokens %d | sup %d | %.0f tok/s | rejected(rank0) %s",
+                    step, loss, grad_norm.item(), scd.get_last_lr()[0],
+                    len(micro_rows) * info.world_size, num_tokens, num_supervised, num_tokens / dt, dict(rejections),
+                )
+
+    return losses
+    # losses = []
+    # fixed_rows = next(rows) if cfg.overfit_one_row else None
+
+    # for step in range(cfg.total_steps):
+    #     t0 = time.perf_counter()
+
+    #     # step 1: fetch micro batches, num_supervised must be known
+    #     micro_rows = [fixed_rows or next(rows) for _ in range(cfg.grad_accum_steps)]
+    #     num_supervised = sum(r.num_supervised for r in micro_rows)
+    #     if num_supervised == 0:
+    #         logger.warning(f"num supervised token is 0 for step {step}")
+    #         continue
+
+    #     # step 2: forward/backwar per batch , all divided by same step level count
+    #     step_loss_sum = 0.0 # just overall loss for logging
+    #     for row in micro_rows:
+    #         batch = collate(row, cfg.device)
+    #         loss_sum = compute_loss_sum(model, batch, cfg.device)
+    #         (loss_sum / num_supervised).backward()
+    #         step_loss_sum += loss_sum.item() # just overall loss for logging
+
+    #     # step 3: one optimiser step per step, not for per batch
+    #     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+    #     if not torch.isfinite(grad_norm):
+    #         logger.warning(f"step {step}: non-finite grad norm {grad_norm}, skipping update")
+    #         opt.zero_grad(set_to_none=True)
+    #         continue
+
+    #     # opt.step is placed outside, because we want all micro-batches to calculate gradients using the same model weights.
+    #     opt.step()
+    #     scd.step()
+    #     opt.zero_grad(set_to_none=True)
+
+    #     loss = step_loss_sum / num_supervised # just overall loss for logging
+    #     losses.append(loss)
+    #     if step % cfg.log_every == 0:
+    #         dt = time.perf_counter() - t0
+    #         num_tokens = sum(len(r.input_ids) for r in micro_rows)
+    #         logger.info(
+    #             "step %4d | loss %.4f | gnorm %.3f | lr %.2e | rows %d | tokens %d | sup %d | %.0f tok/s | rejected %s",
+    #             step, loss, grad_norm.item(), scd.get_last_lr()[0],
+    #             len(micro_rows), num_tokens, num_supervised, num_tokens / dt, dict(rejections),
+    #         )
+
+    # return losses 
     # losses = []
     # fixed_rows = next(rows) if cfg.overfit_one_row else None
 
@@ -272,4 +357,10 @@ def parse_args() -> TrainConfig:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    train(parse_args())
+    logging.getLogger("httpx").setLevel(logging.WARNING)    # hides the "HTTP Request: ..." lines
+    cfg = parse_args()
+    info = init_distributed(cfg.device)
+    try:
+        train(cfg, info=info)
+    finally:
+        cleanup_distributed()   # also on a crash, so NCCL doesn't complain at exit
