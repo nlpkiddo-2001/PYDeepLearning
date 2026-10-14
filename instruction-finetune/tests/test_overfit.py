@@ -41,7 +41,7 @@ def test_overfit_32_samples(tok, tmp_path):
     model.train()
     cfg = TrainConfig(
         data_path=str(data), device="cpu", max_seq_len=2048,   # all 32 samples fit in one row
-        lr=3e-3, warmup_steps=5, total_steps=100, weight_decay=0.0, log_every=1000,
+        lr=3e-3, warmup_ratio=0.05, total_steps=100, weight_decay=0.0, log_every=1000,
     )
     losses = train(cfg, model=model, tokenizer=tok)
 

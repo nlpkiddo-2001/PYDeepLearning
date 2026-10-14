@@ -9,6 +9,7 @@ torchrun starts 2 processes, each with `--device cpu`.
 The CLI tests use a tiny random Qwen3 saved to disk, so load_model() runs for real
 (from_pretrained -> to(device) -> shard_model) without downloading 16 GB.
 """
+import math
 import os
 import subprocess
 import sys
@@ -16,7 +17,9 @@ from collections import Counter
 
 import pytest
 
-from sft.train.train import TrainConfig, train
+from sft.data.chat_tokenizer import ChatTokenizer, TokenizerConfig
+from sft.train.parallel import DistInfo
+from sft.train.train import TrainConfig, plan_steps, steps_per_epoch, train
 from tests.conftest import make_tiny_model
 
 import torch
@@ -54,16 +57,29 @@ def test_fsdp_grads_match_single_process():
 
 
 def test_train_runs_all_steps(tok):
-    cfg = TrainConfig(data_path=FIXTURE, device="cpu", total_steps=3, warmup_steps=1, log_every=1000)
+    cfg = TrainConfig(data_path=FIXTURE, device="cpu", total_steps=3, warmup_ratio=0.34, log_every=1000)
     losses = train(cfg, model=make_tiny_model(len(tok)), tokenizer=tok)
     assert len(losses) == cfg.total_steps, f"train() stopped after {len(losses)} of {cfg.total_steps} steps"
+
+
+def test_total_steps_from_epochs(tok):
+    cfg = TrainConfig(data_path=FIXTURE, device="cpu", epochs=2.5, warmup_ratio=0.1, log_every=1000)
+    chat_tok = ChatTokenizer(tok, TokenizerConfig(max_seq_len=cfg.max_seq_len))
+    info = DistInfo(device="cpu")
+    per_epoch = steps_per_epoch(cfg, chat_tok, info)
+    total, warmup = plan_steps(cfg, chat_tok, info)
+    assert total == math.ceil(2.5 * per_epoch)
+    assert warmup == round(0.1 * total)
+
+    losses = train(cfg, model=make_tiny_model(len(tok)), tokenizer=tok)
+    assert len(losses) == total
 
 
 def cli_args(model_dir):
     return [
         "-m", "sft.train.train",
         "--model_name", model_dir, "--data_path", FIXTURE, "--device", "cpu",
-        "--total_steps", "3", "--warmup_steps", "1", "--grad_accum_steps", "2",
+        "--total_steps", "3", "--warmup_ratio", "0.34", "--grad_accum_steps", "2",
     ]
 
 

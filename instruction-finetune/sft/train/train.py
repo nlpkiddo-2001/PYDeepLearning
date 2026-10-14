@@ -46,9 +46,10 @@ class TrainConfig:
     log_every : int = 1
     device : str = "cuda"
     grad_checkpointing : bool = False
-    total_steps : int = 100
+    epochs : float = 2.0
+    total_steps : int = 0           
     seed : int = 0
-    warmup_steps : int = 10
+    warmup_ratio : float = 0.03    
     overfit_one_row : bool = False
     max_seq_len : int = 4096
     grad_accum_steps : int = 1
@@ -75,16 +76,9 @@ def row_stream(
     def samples():
         while True:
             n_yielded = 0
-            with open(path) as file:
-                for line_idx, line in enumerate(file):
-                    if line_idx % world_size != rank or not line.strip(): # otherwisw every rank would parse every line
-                        continue
-
-                    res = chat_tok(json.loads(line))
-                    for r in res.rejections:
-                        rejections[r.reason.value] += 1
-                    n_yielded += len(res.samples)
-                    yield from res.samples
+            for s in epoch_samples(path, chat_tok, rejections, rank, world_size):
+                n_yielded += 1
+                yield s
 
             # a rank with no samples would loop here forever without streaming and would, never reach the first all_reduce, and every other rank would wait on it.
             if n_yielded == 0:
@@ -93,6 +87,43 @@ def row_stream(
                     f"(needs >= {world_size} lines with train turns; rejections so far: {dict(rejections)})"
                 )
     yield from pack_greedy(samples(), pack_len)
+
+
+def epoch_samples(path: str, chat_tok: ChatTokenizer, rejections: Counter, rank: int = 0, world_size: int = 1):
+    """One pass over this rank's lines of the file."""
+    with open(path) as file:
+        for line_idx, line in enumerate(file):
+            if line_idx % world_size != rank or not line.strip(): # otherwisw every rank would parse every line
+                continue
+
+            res = chat_tok(json.loads(line))
+            for r in res.rejections:
+                rejections[r.reason.value] += 1
+            yield from res.samples
+
+
+def steps_per_epoch(cfg: TrainConfig, chat_tok: ChatTokenizer, info: DistInfo) -> int:
+    """
+    Optimizer steps in one pass over the data. Same formula as audit.py: global rows / rows per step.
+    - extra tokenize + pack pass on CPU, before the model loads (rejections go to a throwaway Counter)
+    - global row count, not this rank's: ranks can differ by a few rows, but must agree on total_steps
+    - approximate by about one row per epoch: row_stream packs across epoch boundaries, this pass doesn't
+    """
+    local_rows = sum(1 for _ in pack_greedy(epoch_samples(cfg.data_path, chat_tok, Counter(), info.rank, info.world_size), cfg.max_seq_len))
+    global_rows = all_reduce_sum(local_rows, info)
+    return max(1, math.ceil(global_rows / (info.world_size * cfg.grad_accum_steps)))
+
+
+def plan_steps(cfg: TrainConfig, chat_tok: ChatTokenizer, info: DistInfo) -> tuple[int, int]:
+    """(total_steps, warmup_steps). total_steps > 0 in the config skips the counting pass."""
+    if cfg.total_steps > 0:
+        total = cfg.total_steps
+    else:
+        per_epoch = steps_per_epoch(cfg, chat_tok, info)
+        total = max(1, math.ceil(cfg.epochs * per_epoch))
+        if info.is_main:
+            logger.info(f"{per_epoch} steps/epoch x {cfg.epochs} epochs -> {total} steps")
+    return total, round(cfg.warmup_ratio * total)
 
 
 def collate(row: PackedRow, device: str):
@@ -148,12 +179,12 @@ def build_optimiser(model, cfg: TrainConfig) -> torch.optim.Optimizer:
         fused=cfg.device.startswith("cuda"),
     )
 
-def build_scheduler(opt: torch.optim.Optimizer, cfg:TrainConfig):
+def build_scheduler(opt: torch.optim.Optimizer, cfg: TrainConfig, total_steps: int, warmup_steps: int):
 
     def lr_lambda(step: int) -> float:
-        if step < cfg.warmup_steps:
-            return (step + 1) / cfg.warmup_steps
-        progress = (step - cfg.warmup_steps) / max(1, cfg.total_steps - cfg.warmup_steps)
+        if step < warmup_steps:
+            return (step + 1) / warmup_steps
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
         progress = min(progress, 1.0)
         return cfg.min_lr_ratio + (1 - cfg.min_lr_ratio) * 0.5 * (1 + math.cos(math.pi * progress)) # cosine formula is -> f(p) = r + (1 - r) * 1 + cos(pi*progress) / 2
 
@@ -219,16 +250,17 @@ def train(cfg: TrainConfig, model=None, tokenizer=None, info: DistInfo | None = 
     chat_tok = ChatTokenizer(tokenizer, TokenizerConfig(max_seq_len=cfg.max_seq_len))
     rejections: Counter = Counter()
     rows = row_stream(path=cfg.data_path, chat_tok=chat_tok, pack_len=cfg.max_seq_len, rejections=rejections, rank=info.rank, world_size=info.world_size)
+    total_steps, warmup_steps = plan_steps(cfg, chat_tok, info)
 
     model = model or load_model(cfg, info)
     opt = build_optimiser(model, cfg)
-    scd = build_scheduler(opt, cfg)
+    scd = build_scheduler(opt, cfg, total_steps, warmup_steps)
     autocast = not info.enabled
 
     losses = []
     fixed_rows = next(rows) if cfg.overfit_one_row else None
 
-    for step in range(cfg.total_steps):
+    for step in range(total_steps):
         t0 = time.perf_counter()
 
         # step 1 fetch micro batches, num supervised must be known
