@@ -28,7 +28,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from sft.train.parallel import DistInfo, shard_model, all_reduce_sum, full_tensor, set_grad_sync, cleanup_distributed, init_distributed
+from sft.train.parallel import DistInfo, shard_model, all_reduce_sum, full_tensor, set_grad_sync, cleanup_distributed, init_distributed, export_hf
 from sft.data.chat_tokenizer import IGNORE_INDEX, ChatTokenizer, TokenizerConfig
 from sft.data.packing import PackedRow, pack_greedy
 
@@ -53,6 +53,7 @@ class TrainConfig:
     max_seq_len : int = 4096
     grad_accum_steps : int = 1
     sync_every_micro_batch : bool = False
+    save_dir : str = ""
 
 
 def row_stream(
@@ -264,6 +265,11 @@ def train(cfg: TrainConfig, model=None, tokenizer=None, info: DistInfo | None = 
                     len(micro_rows) * info.world_size, num_tokens, num_supervised, num_tokens / dt, dict(rejections),
                 )
 
+    if cfg.save_dir:
+        export_hf(model, tokenizer, cfg.save_dir, info)
+        if info.is_main:
+            logger.info(f"saved HF checkpoint to {cfg.save_dir}")
+            
     return losses
     # losses = []
     # fixed_rows = next(rows) if cfg.overfit_one_row else None

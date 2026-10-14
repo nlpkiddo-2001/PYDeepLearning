@@ -19,6 +19,9 @@ import pytest
 from sft.train.train import TrainConfig, train
 from tests.conftest import make_tiny_model
 
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURE = os.path.join(ROOT, "tests/fixtures/sample.jsonl")
 CPU_ENV = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "CHECK_DEVICE": "cpu"}
@@ -75,3 +78,56 @@ def test_cli_torchrun_two_processes(tiny_model_dir):
     assert "step    2" in out, out[-2000:]
     assert "rows 4 " in out          # 2 ranks x grad_accum 2
     assert out.count("step    0") == 1, "only rank 0 should log"
+
+
+def load_exported(path):
+    model = AutoModelForCausalLM.from_pretrained(path)
+    AutoTokenizer.from_pretrained(path)               # tokenizer was saved too
+    return model
+
+
+def check_file(save_dir):
+    """the file itself: bf16, tied weight stored once, config says bf16 (what vLLM / dtype='auto' will use)"""
+    import json
+    from safetensors import safe_open
+
+    with safe_open(os.path.join(save_dir, "model.safetensors"), "pt") as f:
+        keys = set(f.keys())
+        dtypes = {f.get_slice(k).get_dtype() for k in keys}
+    assert dtypes == {"BF16"}, dtypes
+    assert "lm_head.weight" not in keys, "tied weight stored twice"
+    with open(os.path.join(save_dir, "config.json")) as f:
+        config = json.load(f)
+    assert config["dtype"] == "bfloat16"
+    assert config["architectures"] == ["Qwen3ForCausalLM"], "FSDP's wrapper class leaked into config.json"
+
+
+def check_export(save_dir, start_dir):
+    trained = load_exported(save_dir)
+    start = AutoModelForCausalLM.from_pretrained(start_dir)
+
+    assert trained.lm_head.weight is trained.model.embed_tokens.weight, "tie lost in export"
+    assert trained.config.tie_word_embeddings
+
+    start_sd, trained_sd = start.state_dict(), trained.state_dict()
+    assert start_sd.keys() == trained_sd.keys()
+    for k in start_sd:
+        assert start_sd[k].shape == trained_sd[k].shape, k
+
+    # training ran (lr 1e-5, 3 steps): weights moved, but not by much
+    w0 = start.model.layers[0].mlp.down_proj.weight.float()
+    w1 = trained.model.layers[0].mlp.down_proj.weight.float()
+    assert not torch.equal(w0, w1), "exported weights are the starting weights: export didn't get the trained model"
+    assert (w1 - w0).norm() / w0.norm() < 0.1
+
+
+def test_export_single_process(tiny_model_dir, tmp_path):
+    run([sys.executable, *cli_args(tiny_model_dir), "--save_dir", str(tmp_path / "out")])
+    check_export(tmp_path / "out", tiny_model_dir)
+
+
+def test_export_torchrun_two_processes(tiny_model_dir, tmp_path):
+    out = run(torchrun(2, *cli_args(tiny_model_dir), "--save_dir", str(tmp_path / "out")))
+    assert out.count("saved HF checkpoint") == 1, "only rank 0 should write/log"
+    check_file(tmp_path / "out")
+    check_export(tmp_path / "out", tiny_model_dir)

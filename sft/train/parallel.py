@@ -5,11 +5,13 @@ This module is for one layer in one gpu
 """
 import os
 from dataclasses import dataclass
+import copy
 
 import torch
 import torch.distributed as dist
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard, FSDPModule
 from torch.distributed.tensor import DTensor
+from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict
 
 @dataclass
 class DistInfo:
@@ -91,4 +93,37 @@ def full_tensor(t: torch.Tensor) -> torch.Tensor:
     .full_tensor() makes it a plain tensor for isfinite() and .item().
     """
     return t.full_tensor() if isinstance(t, DTensor) else t
+
+
+def export_hf(model , tokenizer, out_dir, info, dtype: torch.dtype = torch.bfloat16):
+    """
+    normal Hugging Face checkpoint (config + safetensors + tokenizer) that
+    AutoModelForCausalLM.from_pretrained(out_dir) can load, with no FSDP involved.
+    """
+    if not info.enabled:
+        model.save_pretrained(out_dir)
+        tokenizer.save_pretrained(out_dir)
+        return 
+
+    state_dict = get_model_state_dict(
+        model, options=StateDictOptions(full_state_dict=True, cpu_offload=True)
+    )
+
+    if info.is_main:
+        state_dict = {k: v.to(dtype) for k, v in state_dict.items()}
+
+        if model.config.tie_word_embeddings:
+            state_dict.pop("lm_head.weight", None) # Tied weights: the gathered dict has BOTH embed_tokens.weight and lm_head.weight (two copies of the same tensor, 0.78 GB for Qwen3-4B)
+
+
+        model.save_pretrained(out_dir, state_dict=state_dict)
+
+        config = copy.deepcopy(model.config)
+        config.dtype = dtype
+        config.save_pretrained(out_dir)
+        tokenizer.save_pretrained(out_dir)
+
+    dist.barrier() # The other ranks must not exit (and tear down the process group) while rank 0 is still writing.
+
+
 
