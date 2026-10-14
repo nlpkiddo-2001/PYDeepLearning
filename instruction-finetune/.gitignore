@@ -9,3 +9,6 @@ __pycache__/
 # training data anywhere in the tree (keep the small test fixtures)
 *.jsonl
 !tests/fixtures/*.jsonl
+
+# local session notes
+/handoff.md
